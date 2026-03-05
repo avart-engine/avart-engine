@@ -1,24 +1,35 @@
 from __future__ import annotations
 
+import io
 import os
 from typing import Optional
 
 import numpy as np
 import cv2
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import Response, JSONResponse
+from fastapi import FastAPI, File, UploadFile, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 
-SERVICE_NAME = "avart-engine"
+app = FastAPI(
+    title="avart-engine",
+    version="0.2.0",
+    description="Poster engine (stroke preview). Upload a profile photo on white background → outer contour line.",
+)
 
-app = FastAPI(title=SERVICE_NAME, version="0.1.0")
-
-# (Praktisk når du senere kalder API'et fra avart.dk / one.com)
+# ✅ CORS: tillad din one.com-side at kalde API’et fra browseren
+# (tilpas når du kender dit endelige domæne)
+ALLOWED_ORIGINS = [
+    "https://avart.dk",
+    "https://www.avart.dk",
+    "https://avart-poster.dk",
+    "https://www.avart-poster.dk",
+    "http://localhost:3000",
+    "http://localhost:5173",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # stram dette senere
-    allow_credentials=False,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -26,186 +37,112 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": SERVICE_NAME}
+    return {"ok": True, "service": "avart-engine"}
 
 
-def _read_upload_to_bgr(file_bytes: bytes) -> np.ndarray:
-    """Decode uploaded image bytes into OpenCV BGR image."""
-    data = np.frombuffer(file_bytes, dtype=np.uint8)
-    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+def _read_image(file_bytes: bytes) -> np.ndarray:
+    """Decode uploaded bytes to BGR image."""
+    arr = np.frombuffer(file_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
-        raise HTTPException(status_code=400, detail="Could not decode image. Upload a JPG/PNG.")
+        raise ValueError("Could not decode image. Please upload a valid JPG/PNG.")
     return img
 
 
-def _auto_threshold_for_profile(gray: np.ndarray) -> np.ndarray:
-    """
-    Create a binary mask where the subject is white (255) and background black (0).
-    We assume a bright/white background is best, but we also auto-invert if needed.
-    """
-    # Reduce noise a bit
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    # Otsu threshold
-    _, th = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    # Determine if background is mostly white; if not, invert
-    # corners are usually background
-    h, w = th.shape[:2]
-    corners = np.concatenate(
-        [
-            th[0:10, 0:10].ravel(),
-            th[0:10, w - 10 : w].ravel(),
-            th[h - 10 : h, 0:10].ravel(),
-            th[h - 10 : h, w - 10 : w].ravel(),
-        ]
-    )
-    bg_is_white = (corners.mean() > 127)
-
-    # If background is white, subject tends to be darker -> threshold likely makes bg white.
-    # We want subject=white, bg=black -> invert when bg is white.
-    if bg_is_white:
-        th = cv2.bitwise_not(th)
-
-    # Clean small specks
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    th = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel, iterations=1)
-    th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-    return th
-
-
-def _largest_external_contour(mask: np.ndarray) -> Optional[np.ndarray]:
-    """
-    Returns the largest external contour (by area).
-    """
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    if not contours:
-        return None
-    return max(contours, key=cv2.contourArea)
-
-
-def _smooth_contour(cnt: np.ndarray, window: int = 15) -> np.ndarray:
-    """
-    Simple moving-average smoothing over contour points.
-    Keeps shape but reduces jaggedness. Works well for "stroke".
-    """
-    pts = cnt[:, 0, :].astype(np.float32)
-    n = len(pts)
-    if n < max(10, window):
-        return cnt
-
-    window = max(5, window)
-    if window % 2 == 0:
-        window += 1
-
-    pad = window // 2
-    pts_pad = np.vstack([pts[-pad:], pts, pts[:pad]])
-
-    smoothed = np.empty_like(pts)
-    for i in range(n):
-        seg = pts_pad[i : i + window]
-        smoothed[i] = seg.mean(axis=0)
-
-    smoothed = np.round(smoothed).astype(np.int32).reshape(-1, 1, 2)
-    return smoothed
-
-
-def _render_stroke_png(
+def _outer_contour_mask_for_white_bg(
     bgr: np.ndarray,
-    line_thickness_px: int = 4,
-    simplify_eps_ratio: float = 0.0015,
-    smooth_window: int = 17,
-    pad_px: int = 10,
-) -> bytes:
+    *,
+    white_threshold: int = 235,
+    min_area_ratio: float = 0.02,
+) -> np.ndarray:
     """
-    Make a white canvas with a single black outer contour (profile stroke).
-    Returns PNG bytes.
+    Create a binary mask for the main subject assuming a *light/white background*.
+    Returns mask with subject = 255, background = 0.
     """
     h, w = bgr.shape[:2]
+
+    # 1) Convert to grayscale (stabilt for hvide baggrunde)
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
-    mask = _auto_threshold_for_profile(gray)
-    cnt = _largest_external_contour(mask)
-    if cnt is None or cv2.contourArea(cnt) < 2000:
-        raise HTTPException(
-            status_code=400,
-            detail="Could not detect a clear silhouette. Use white background and darker subject.",
-        )
+    # 2) Find background-ish pixels (nær hvid)
+    # Background = 1 where gray >= white_threshold
+    bg = (gray >= white_threshold).astype(np.uint8) * 255
 
-    # Slight simplification (fewer points)
-    arc = cv2.arcLength(cnt, True)
-    eps = max(1.0, simplify_eps_ratio * arc)
-    cnt = cv2.approxPolyDP(cnt, eps, True)
+    # 3) Invert to get rough foreground
+    fg = cv2.bitwise_not(bg)
 
-    # Smooth the contour for nicer lines
-    cnt = _smooth_contour(cnt, window=smooth_window)
+    # 4) Cleanup / fill holes (morfologi)
+    k = max(3, int(min(h, w) * 0.01) | 1)  # odd kernel size
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, kernel, iterations=2)
+    fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN, kernel, iterations=1)
 
-    # Add padding so stroke doesn't touch edges
-    out_h, out_w = h + 2 * pad_px, w + 2 * pad_px
-    out = np.full((out_h, out_w, 3), 255, dtype=np.uint8)
+    # 5) Find largest contour (typisk person)
+    contours, _ = cv2.findContours(fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return fg  # fallback
 
-    cnt2 = cnt.copy()
-    cnt2[:, 0, 0] += pad_px
-    cnt2[:, 0, 1] += pad_px
+    areas = [cv2.contourArea(c) for c in contours]
+    largest_idx = int(np.argmax(areas))
+    largest = contours[largest_idx]
 
-    # Draw stroke
-    cv2.drawContours(
-        out,
-        [cnt2],
-        contourIdx=-1,
-        color=(0, 0, 0),
-        thickness=int(line_thickness_px),
-        lineType=cv2.LINE_AA,
-    )
+    # 6) Reject if too small → return raw fg
+    if cv2.contourArea(largest) < (h * w * min_area_ratio):
+        return fg
 
-    ok, buf = cv2.imencode(".png", out)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.drawContours(mask, [largest], -1, 255, thickness=cv2.FILLED)
+    return mask
+
+
+def _render_outline_png(
+    mask: np.ndarray,
+    *,
+    thickness_px: int = 6,
+    smooth: bool = True,
+) -> bytes:
+    """
+    Render only the OUTER contour as black stroke on white background.
+    Returns PNG bytes.
+    """
+    h, w = mask.shape[:2]
+
+    # optional smoothing to make contour less "jagged"
+    m = mask.copy()
+    if smooth:
+        # blur + rethreshold
+        m = cv2.GaussianBlur(m, (0, 0), sigmaX=2.0, sigmaY=2.0)
+        _, m = cv2.threshold(m, 127, 255, cv2.THRESH_BINARY)
+
+    contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    canvas = np.ones((h, w, 3), dtype=np.uint8) * 255  # white background
+    if contours:
+        # Draw ONLY outer contours
+        cv2.drawContours(canvas, contours, -1, (0, 0, 0), thickness=thickness_px, lineType=cv2.LINE_AA)
+
+    ok, png = cv2.imencode(".png", canvas)
     if not ok:
-        raise HTTPException(status_code=500, detail="Failed to encode PNG.")
-    return buf.tobytes()
+        raise ValueError("Failed to encode PNG.")
+    return png.tobytes()
 
 
-@app.post("/stroke/preview")
+@app.post("/stroke/preview", summary="Stroke Preview")
 async def stroke_preview(
     file: UploadFile = File(...),
-    thickness: int = 4,
+    thickness: int = Query(6, ge=1, le=40, description="Stroke thickness in pixels (preview)"),
+    white_threshold: int = Query(235, ge=200, le=255, description="How 'white' the background must be to be treated as background"),
+    smooth: bool = Query(True, description="Smoother contour lines"),
 ):
     """
-    Upload a JPG/PNG profile photo and get a stroke-only preview (PNG).
-    - thickness: line thickness in pixels (preview)
+    Upload a profile photo (ideally on white background).
+    Returns a PNG with only the outer silhouette contour (stroke).
     """
-    if not file:
-        raise HTTPException(status_code=400, detail="No file uploaded.")
+    data = await file.read()
+    bgr = _read_image(data)
 
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty file.")
+    # Build mask and outline
+    mask = _outer_contour_mask_for_white_bg(bgr, white_threshold=white_threshold)
+    png_bytes = _render_outline_png(mask, thickness_px=thickness, smooth=smooth)
 
-    bgr = _read_upload_to_bgr(content)
-
-    # Clamp thickness (preview only)
-    thickness = int(max(1, min(thickness, 12)))
-
-    png_bytes = _render_stroke_png(
-        bgr=bgr,
-        line_thickness_px=thickness,
-        simplify_eps_ratio=0.0015,
-        smooth_window=17,
-        pad_px=10,
-    )
     return Response(content=png_bytes, media_type="image/png")
-
-
-@app.get("/")
-def root():
-    return JSONResponse({"hello": "world"})
-
-
-# Render will run: uvicorn main:app --host 0.0.0.0 --port $PORT
-# If you ever run locally:
-#   uvicorn main:app --reload
-if __name__ == "__main__":
-    import uvicorn
-
-    port = int(os.getenv("PORT", "8000"))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
