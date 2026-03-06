@@ -3,7 +3,5 @@ uvicorn
 numpy
 opencv-python-headless
 python-multipart
-reportlab
-rembg
-onnxruntime
 Pillow
+reportlab
