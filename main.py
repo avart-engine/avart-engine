@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-from typing import Tuple
 
 import cv2
 import numpy as np
@@ -12,7 +11,7 @@ from fastapi.responses import Response, JSONResponse
 
 app = FastAPI(
     title="avart-engine",
-    version="0.6.0",
+    version="0.7.0",
     description="Alpha-based silhouette engine for Avart",
 )
 
@@ -37,8 +36,7 @@ def health():
 def read_upload_to_rgba(upload: UploadFile) -> np.ndarray:
     """
     Read uploaded file as RGBA image.
-    Expects PNG with transparency for best result.
-    Returns numpy array shape (H, W, 4)
+    Best input is PNG with transparent background.
     """
     data = upload.file.read()
     if not data:
@@ -47,19 +45,24 @@ def read_upload_to_rgba(upload: UploadFile) -> np.ndarray:
     pil = Image.open(io.BytesIO(data)).convert("RGBA")
     rgba = np.array(pil)
 
-    if rgba is None or rgba.shape[2] != 4:
+    if rgba is None or len(rgba.shape) != 3 or rgba.shape[2] != 4:
         raise ValueError("Could not decode RGBA image")
+
     return rgba
-    
+
+
 def alpha_to_mask(
     rgba: np.ndarray,
     alpha_threshold: int = 1,
     smooth: bool = True,
 ) -> np.ndarray:
-
+    """
+    Convert alpha channel to binary mask:
+    subject = 255
+    background = 0
+    """
     alpha = rgba[:, :, 3]
 
-    # brug alpha direkte
     mask = np.where(alpha > alpha_threshold, 255, 0).astype(np.uint8)
 
     if smooth:
@@ -70,44 +73,11 @@ def alpha_to_mask(
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
 
     return mask
+
+
+def smooth_contour(contour: np.ndarray, window: int = 15) -> np.ndarray:
     """
-    Convert alpha channel to binary mask:
-    subject = 255
-    background = 0
-    """
-
-    alpha = rgba[:, :, 3]
-
-    # brug alpha direkte
-    mask = np.where(alpha > alpha_threshold, 255, 0).astype(np.uint8)
-
-    if smooth:
-        mask = cv2.GaussianBlur(mask, (5, 5), 0)
-        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
-
-    return keep_largest_component(mask)
-
-
-def keep_largest_component(mask: np.ndarray) -> np.ndarray:
-    """
-    Keep only largest connected white component.
-    """
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    if num_labels <= 1:
-        return mask
-
-    largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
-    clean = np.zeros_like(mask)
-    clean[labels == largest_label] = 255
-    return clean
-
-
-def smooth_contour(contour: np.ndarray, window: int = 17) -> np.ndarray:
-    """
-    Moving average smoothing over contour points.
+    Smooth contour using moving average.
     """
     pts = contour[:, 0, :].astype(np.float32)
     n = len(pts)
@@ -152,6 +122,29 @@ def get_smoothed_outer_contour(
     return smoothed
 
 
+def crop_contour_to_subject(
+    contour: np.ndarray,
+    width: int,
+    height: int,
+    pad: int = 30,
+):
+    """
+    Crop contour to bounding box + padding.
+    """
+    x, y, w, h = cv2.boundingRect(contour)
+
+    x1 = max(0, x - pad)
+    y1 = max(0, y - pad)
+    x2 = min(width, x + w + pad)
+    y2 = min(height, y + h + pad)
+
+    cropped = contour.copy()
+    cropped[:, 0, 0] -= x1
+    cropped[:, 0, 1] -= y1
+
+    return cropped, (x2 - x1), (y2 - y1)
+
+
 def render_preview_png(
     contour: np.ndarray,
     width: int,
@@ -163,21 +156,9 @@ def render_preview_png(
 ) -> bytes:
     """
     Draw contour as black stroke on white background.
-    Optional crop_to_subject for testing.
     """
     if crop_to_subject:
-        x, y, w, h = cv2.boundingRect(contour)
-        x1 = max(0, x - pad)
-        y1 = max(0, y - pad)
-        x2 = min(width, x + w + pad)
-        y2 = min(height, y + h + pad)
-
-        contour = contour.copy()
-        contour[:, 0, 0] -= x1
-        contour[:, 0, 1] -= y1
-
-        width = x2 - x1
-        height = y2 - y1
+        contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
     W = width * upscale
     H = height * upscale
@@ -202,6 +183,76 @@ def render_preview_png(
     ok, png = cv2.imencode(".png", canvas)
     if not ok:
         raise ValueError("Could not encode PNG")
+
+    return png.tobytes()
+
+
+def render_debug_png(
+    rgba: np.ndarray,
+    mask: np.ndarray,
+    contour: np.ndarray,
+    thickness: int = 2,
+    upscale: int = 4,
+) -> bytes:
+    """
+    Returns one debug image with 4 panels:
+    1) original over checkerboard
+    2) binary mask
+    3) contour on white
+    4) final stroke
+    """
+    h, w = rgba.shape[:2]
+
+    # panel 1: original over checkerboard
+    checker = np.zeros((h, w, 3), dtype=np.uint8)
+    tile = 20
+    for y in range(0, h, tile):
+        for x in range(0, w, tile):
+            v = 220 if ((x // tile) + (y // tile)) % 2 == 0 else 245
+            checker[y:y+tile, x:x+tile] = (v, v, v)
+
+    alpha = rgba[:, :, 3:4].astype(np.float32) / 255.0
+    rgb = rgba[:, :, :3].astype(np.float32)
+    checker_f = checker.astype(np.float32)
+    panel1 = (rgb * alpha + checker_f * (1 - alpha)).astype(np.uint8)
+
+    # panel 2: mask
+    panel2 = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+
+    # panel 3: contour
+    panel3 = np.full((h, w, 3), 255, dtype=np.uint8)
+    cv2.drawContours(panel3, [contour], -1, (0, 0, 255), 2, lineType=cv2.LINE_AA)
+
+    # panel 4: final
+    final_png = render_preview_png(
+        contour=contour,
+        width=w,
+        height=h,
+        thickness=thickness,
+        upscale=upscale,
+        crop_to_subject=False,
+        pad=30,
+    )
+    final_arr = cv2.imdecode(np.frombuffer(final_png, np.uint8), cv2.IMREAD_COLOR)
+
+    def label(img: np.ndarray, text: str) -> np.ndarray:
+        out = img.copy()
+        cv2.putText(out, text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (30, 30, 30), 2, cv2.LINE_AA)
+        return out
+
+    panel1 = label(panel1, "1. original")
+    panel2 = label(panel2, "2. mask")
+    panel3 = label(panel3, "3. contour")
+    final_arr = label(final_arr, "4. final")
+
+    top = np.hstack([panel1, panel2])
+    bottom = np.hstack([panel3, final_arr])
+    debug = np.vstack([top, bottom])
+
+    ok, png = cv2.imencode(".png", debug)
+    if not ok:
+        raise ValueError("Could not encode debug PNG")
+
     return png.tobytes()
 
 
@@ -215,21 +266,9 @@ def contour_to_svg(
 ) -> str:
     """
     Convert contour to SVG path.
-    STEP 1 version = polyline path, not bezier yet.
     """
     if crop_to_subject:
-        x, y, w, h = cv2.boundingRect(contour)
-        x1 = max(0, x - pad)
-        y1 = max(0, y - pad)
-        x2 = min(width, x + w + pad)
-        y2 = min(height, y + h + pad)
-
-        contour = contour.copy()
-        contour[:, 0, 0] -= x1
-        contour[:, 0, 1] -= y1
-
-        width = x2 - x1
-        height = y2 - y1
+        contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
     pts = contour[:, 0, :]
     if len(pts) < 3:
@@ -255,13 +294,13 @@ def contour_to_svg(
 @app.post("/alpha/preview")
 async def alpha_preview(
     file: UploadFile = File(...),
-    alpha_threshold: int = Query(10, ge=0, le=255),
+    alpha_threshold: int = Query(1, ge=0, le=255),
     smooth: bool = Query(True),
-    epsilon_ratio: float = Query(0.0015, ge=0.0003, le=0.02),
-    smooth_window: int = Query(17, ge=5, le=51),
+    epsilon_ratio: float = Query(0.001, ge=0.0003, le=0.02),
+    smooth_window: int = Query(15, ge=5, le=51),
     thickness: int = Query(2, ge=1, le=8),
     upscale: int = Query(4, ge=1, le=8),
-    crop_to_subject: bool = Query(False),
+    crop_to_subject: bool = Query(True),
     pad: int = Query(30, ge=0, le=300),
 ):
     try:
@@ -281,7 +320,7 @@ async def alpha_preview(
         )
 
         png = render_preview_png(
-            contour,
+            contour=contour,
             width=w,
             height=h,
             thickness=thickness,
@@ -296,15 +335,54 @@ async def alpha_preview(
         return JSONResponse({"error": str(e)}, status_code=400)
 
 
+@app.post("/alpha/debug")
+async def alpha_debug(
+    file: UploadFile = File(...),
+    alpha_threshold: int = Query(1, ge=0, le=255),
+    smooth: bool = Query(True),
+    epsilon_ratio: float = Query(0.001, ge=0.0003, le=0.02),
+    smooth_window: int = Query(15, ge=5, le=51),
+    thickness: int = Query(2, ge=1, le=8),
+    upscale: int = Query(4, ge=1, le=8),
+):
+    try:
+        rgba = read_upload_to_rgba(file)
+
+        mask = alpha_to_mask(
+            rgba,
+            alpha_threshold=alpha_threshold,
+            smooth=smooth,
+        )
+
+        contour = get_smoothed_outer_contour(
+            mask,
+            epsilon_ratio=epsilon_ratio,
+            smooth_window=smooth_window,
+        )
+
+        png = render_debug_png(
+            rgba=rgba,
+            mask=mask,
+            contour=contour,
+            thickness=thickness,
+            upscale=upscale,
+        )
+
+        return Response(content=png, media_type="image/png")
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
 @app.post("/alpha/svg")
 async def alpha_svg(
     file: UploadFile = File(...),
-    alpha_threshold: int = Query(10, ge=0, le=255),
+    alpha_threshold: int = Query(1, ge=0, le=255),
     smooth: bool = Query(True),
-    epsilon_ratio: float = Query(0.0015, ge=0.0003, le=0.02),
-    smooth_window: int = Query(17, ge=5, le=51),
+    epsilon_ratio: float = Query(0.001, ge=0.0003, le=0.02),
+    smooth_window: int = Query(15, ge=5, le=51),
     stroke_width: float = Query(2.0, ge=0.5, le=10.0),
-    crop_to_subject: bool = Query(False),
+    crop_to_subject: bool = Query(True),
     pad: int = Query(30, ge=0, le=300),
 ):
     try:
@@ -324,7 +402,7 @@ async def alpha_svg(
         )
 
         svg = contour_to_svg(
-            contour,
+            contour=contour,
             width=w,
             height=h,
             stroke_width=stroke_width,
