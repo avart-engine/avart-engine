@@ -105,20 +105,37 @@ def get_smoothed_outer_contour(
     epsilon_ratio: float = 0.001,
     smooth_window: int = 15,
 ) -> np.ndarray:
-    """
-    Find outer contour, simplify slightly, then smooth.
-    """
+
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
     if not contours:
         raise ValueError("No contour found")
 
     largest = max(contours, key=cv2.contourArea)
 
-    peri = cv2.arcLength(largest, True)
-    eps = max(1.0, peri * epsilon_ratio)
-    approx = cv2.approxPolyDP(largest, eps, True)
+    # DO NOT simplify contour yet
+    contour = largest
 
-    smoothed = smooth_contour(approx, window=smooth_window)
+    # smooth contour
+    pts = contour[:, 0, :].astype(np.float32)
+
+    n = len(pts)
+    if n < smooth_window:
+        return contour
+
+    if smooth_window % 2 == 0:
+        smooth_window += 1
+
+    pad = smooth_window // 2
+    pts_pad = np.vstack([pts[-pad:], pts, pts[:pad]])
+
+    smoothed = []
+    for i in range(n):
+        segment = pts_pad[i:i+smooth_window]
+        smoothed.append(segment.mean(axis=0))
+
+    smoothed = np.array(smoothed, dtype=np.int32).reshape(-1,1,2)
+
     return smoothed
 
 
