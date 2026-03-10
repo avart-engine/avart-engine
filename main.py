@@ -240,11 +240,12 @@ def render_preview_png(
     crop_to_subject: bool = False,
     pad: int = 30,
 ) -> bytes:
-    if crop_to_subject:
-        contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
+   if crop_to_subject:
+    contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
-    # open contour at bottom
-    contour = open_contour_at_bottom(contour, height=height, bleed=0)
+contour = anchor_contour_to_bottom(contour, height)
+contour = open_contour_at_bottom(contour, height=height, bleed=0)
+
 
     W = width * upscale
     H = height * upscale
@@ -339,10 +340,12 @@ def contour_to_svg(
     crop_to_subject: bool = False,
     pad: int = 30,
 ) -> str:
-    if crop_to_subject:
-        contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
+   if crop_to_subject:
+    contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
-    contour = open_contour_at_bottom(contour, height=height, bleed=0)
+contour = anchor_contour_to_bottom(contour, height)
+contour = open_contour_at_bottom(contour, height=height, bleed=0)
+
 
     pts = contour[:, 0, :]
 
