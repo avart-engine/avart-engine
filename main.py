@@ -247,7 +247,6 @@ def render_debug_png(
 
     return png.tobytes()
 
-
 def contour_to_svg(
     contour: np.ndarray,
     width: int,
@@ -257,25 +256,56 @@ def contour_to_svg(
     pad: int = 30,
 ) -> str:
     """
-    Convert contour to SVG path.
+    Convert contour to smooth SVG path using quadratic curves.
     """
+
     if crop_to_subject:
         contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
     pts = contour[:, 0, :]
-    if len(pts) < 3:
-        raise ValueError("Contour too small for SVG")
 
-    d = f"M {pts[0,0]} {pts[0,1]} "
-    for p in pts[1:]:
-        d += f"L {p[0]} {p[1]} "
-    d += "Z"
+    if len(pts) < 3:
+        raise ValueError("Contour too small")
+
+    def midpoint(p1, p2):
+        return ((p1[0]+p2[0])/2, (p1[1]+p2[1])/2)
+
+    d = []
+
+    for i in range(len(pts)):
+        p0 = pts[i]
+        p1 = pts[(i+1) % len(pts)]
+
+        mx, my = midpoint(p0, p1)
+
+        if i == 0:
+            d.append(f"M {mx:.2f} {my:.2f}")
+        else:
+            d.append(f"Q {p0[0]:.2f} {p0[1]:.2f} {mx:.2f} {my:.2f}")
+
+    d.append("Z")
+
+    path = " ".join(d)
 
     svg = f'''<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
-  <rect width="100%" height="100%" fill="white"/>
-  <path d="{d}" fill="none" stroke="black" stroke-width="{stroke_width}" stroke-linejoin="round" stroke-linecap="round"/>
-</svg>'''
+<svg xmlns="http://www.w3.org/2000/svg"
+width="{width}"
+height="{height}"
+viewBox="0 0 {width} {height}">
+
+<rect width="100%" height="100%" fill="white"/>
+
+<path
+d="{path}"
+fill="none"
+stroke="black"
+stroke-width="{stroke_width}"
+stroke-linecap="round"
+stroke-linejoin="round"/>
+
+</svg>
+'''
+
     return svg
 
 
