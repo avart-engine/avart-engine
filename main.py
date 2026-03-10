@@ -339,12 +339,11 @@ def contour_to_svg(
     crop_to_subject: bool = False,
     pad: int = 30,
 ) -> str:
-   if crop_to_subject:
-    contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
+    if crop_to_subject:
+        contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
-contour = anchor_contour_to_bottom(contour, height)
-contour = open_contour_at_bottom(contour, height=height, bleed=20)
-
+    contour = anchor_contour_to_bottom(contour, height)
+    contour = open_contour_at_bottom(contour, height=height, bleed=20)
 
     pts = contour[:, 0, :]
 
