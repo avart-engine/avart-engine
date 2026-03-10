@@ -8,8 +8,8 @@ from fastapi.responses import Response, JSONResponse
 
 app = FastAPI(
     title="avart-engine",
-    version="0.7.1",
-    description="Stable alpha-based silhouette engine for Avart",
+    version="0.9.0",
+    description="Alpha-based silhouette engine with auto resize and simplify-after-smoothing",
 )
 
 app.add_middleware(
@@ -19,6 +19,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+MAX_DIMENSION = 1600
 
 
 @app.get("/health")
@@ -30,10 +32,27 @@ def health():
 # Helpers
 # --------------------------------------------------
 
-def read_upload_to_rgba(upload: UploadFile) -> np.ndarray:
+def resize_if_needed_rgba(rgba: np.ndarray, max_dimension: int = MAX_DIMENSION) -> np.ndarray:
+    h, w = rgba.shape[:2]
+    longest = max(h, w)
+
+    if longest <= max_dimension:
+        return rgba
+
+    scale = max_dimension / float(longest)
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+
+    resized = cv2.resize(rgba, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    return resized
+
+
+def read_upload_to_rgba(
+    upload: UploadFile,
+    max_dimension: int = MAX_DIMENSION,
+) -> np.ndarray:
     """
-    Read uploaded PNG with transparency correctly using OpenCV.
-    Returns RGBA image.
+    Read uploaded image as RGBA using OpenCV, then auto-resize if needed.
     """
     data = upload.file.read()
 
@@ -57,6 +76,8 @@ def read_upload_to_rgba(upload: UploadFile) -> np.ndarray:
         raise ValueError("Image must have 4 channels")
 
     rgba = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+    rgba = resize_if_needed_rgba(rgba, max_dimension=max_dimension)
+
     return rgba
 
 
@@ -65,11 +86,6 @@ def alpha_to_mask(
     alpha_threshold: int = 1,
     smooth: bool = True,
 ) -> np.ndarray:
-    """
-    Convert alpha channel to binary mask:
-    subject = 255
-    background = 0
-    """
     alpha = rgba[:, :, 3]
     mask = np.where(alpha > alpha_threshold, 255, 0).astype(np.uint8)
 
@@ -83,13 +99,38 @@ def alpha_to_mask(
     return mask
 
 
+def smooth_contour_points(points: np.ndarray, smooth_window: int = 9) -> np.ndarray:
+    """
+    Closed moving-average smoothing on contour points.
+    points shape: (N, 2)
+    """
+    n = len(points)
+    if n < smooth_window or n < 10:
+        return points.copy()
+
+    if smooth_window % 2 == 0:
+        smooth_window += 1
+
+    pad = smooth_window // 2
+    pts_pad = np.vstack([points[-pad:], points, points[:pad]])
+
+    smoothed = []
+    for i in range(n):
+        segment = pts_pad[i:i + smooth_window]
+        smoothed.append(segment.mean(axis=0))
+
+    return np.array(smoothed, dtype=np.float32)
+
+
 def get_smoothed_outer_contour(
     mask: np.ndarray,
-    epsilon_ratio: float = 0.001,
-    smooth_window: int = 15,
+    epsilon_ratio: float = 0.00045,
+    smooth_window: int = 9,
 ) -> np.ndarray:
     """
-    Find outer contour and smooth it using a simple moving average.
+    1) Find contour
+    2) Smooth contour
+    3) Simplify contour AFTER smoothing
     """
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
@@ -97,28 +138,19 @@ def get_smoothed_outer_contour(
         raise ValueError("No contour found")
 
     largest = max(contours, key=cv2.contourArea)
+    points = largest[:, 0, :].astype(np.float32)
 
-    contour = largest
-    pts = contour[:, 0, :].astype(np.float32)
+    # Smooth first
+    smoothed = smooth_contour_points(points, smooth_window=smooth_window)
 
-    n = len(pts)
-    if n < smooth_window:
-        return contour
+    smoothed_contour = np.round(smoothed).astype(np.int32).reshape(-1, 1, 2)
 
-    if smooth_window % 2 == 0:
-        smooth_window += 1
+    # Simplify after smoothing
+    peri = cv2.arcLength(smoothed_contour, True)
+    eps = max(0.5, peri * epsilon_ratio)
+    simplified = cv2.approxPolyDP(smoothed_contour, eps, True)
 
-    pad = smooth_window // 2
-    pts_pad = np.vstack([pts[-pad:], pts, pts[:pad]])
-
-    smoothed = []
-    for i in range(n):
-        segment = pts_pad[i:i + smooth_window]
-        smoothed.append(segment.mean(axis=0))
-
-    smoothed = np.array(smoothed, dtype=np.int32).reshape(-1, 1, 2)
-
-    return smoothed
+    return simplified
 
 
 def crop_contour_to_subject(
@@ -150,9 +182,6 @@ def render_preview_png(
     crop_to_subject: bool = False,
     pad: int = 30,
 ) -> bytes:
-    """
-    Draw contour as black stroke on white background.
-    """
     if crop_to_subject:
         contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
@@ -190,13 +219,6 @@ def render_debug_png(
     thickness: int = 2,
     upscale: int = 4,
 ) -> bytes:
-    """
-    Returns one debug image with 4 panels:
-    1) original over checkerboard
-    2) binary mask
-    3) contour on white
-    4) final stroke
-    """
     h, w = rgba.shape[:2]
 
     checker = np.zeros((h, w, 3), dtype=np.uint8)
@@ -247,6 +269,7 @@ def render_debug_png(
 
     return png.tobytes()
 
+
 def contour_to_svg(
     contour: np.ndarray,
     width: int,
@@ -256,9 +279,8 @@ def contour_to_svg(
     pad: int = 30,
 ) -> str:
     """
-    Convert contour to smooth SVG path using quadratic curves.
+    Smooth SVG path using quadratic curves.
     """
-
     if crop_to_subject:
         contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
@@ -268,14 +290,13 @@ def contour_to_svg(
         raise ValueError("Contour too small")
 
     def midpoint(p1, p2):
-        return ((p1[0]+p2[0])/2, (p1[1]+p2[1])/2)
+        return ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
 
     d = []
 
     for i in range(len(pts)):
         p0 = pts[i]
-        p1 = pts[(i+1) % len(pts)]
-
+        p1 = pts[(i + 1) % len(pts)]
         mx, my = midpoint(p0, p1)
 
         if i == 0:
@@ -284,7 +305,6 @@ def contour_to_svg(
             d.append(f"Q {p0[0]:.2f} {p0[1]:.2f} {mx:.2f} {my:.2f}")
 
     d.append("Z")
-
     path = " ".join(d)
 
     svg = f'''<?xml version="1.0" encoding="UTF-8"?>
@@ -292,20 +312,16 @@ def contour_to_svg(
 width="{width}"
 height="{height}"
 viewBox="0 0 {width} {height}">
-
-<rect width="100%" height="100%" fill="white"/>
-
-<path
-d="{path}"
-fill="none"
-stroke="black"
-stroke-width="{stroke_width}"
-stroke-linecap="round"
-stroke-linejoin="round"/>
-
+  <rect width="100%" height="100%" fill="white"/>
+  <path
+    d="{path}"
+    fill="none"
+    stroke="black"
+    stroke-width="{stroke_width}"
+    stroke-linecap="round"
+    stroke-linejoin="round"/>
 </svg>
 '''
-
     return svg
 
 
@@ -316,17 +332,18 @@ stroke-linejoin="round"/>
 @app.post("/alpha/preview")
 async def alpha_preview(
     file: UploadFile = File(...),
+    max_dimension: int = Query(MAX_DIMENSION, ge=600, le=3000),
     alpha_threshold: int = Query(1, ge=0, le=255),
     smooth: bool = Query(True),
-    epsilon_ratio: float = Query(0.001, ge=0.0001, le=0.02),
-    smooth_window: int = Query(15, ge=5, le=51),
-    thickness: int = Query(2, ge=1, le=8),
+    epsilon_ratio: float = Query(0.00045, ge=0.00005, le=0.02),
+    smooth_window: int = Query(9, ge=3, le=51),
+    thickness: int = Query(2, ge=1, le=12),
     upscale: int = Query(4, ge=1, le=8),
     crop_to_subject: bool = Query(True),
     pad: int = Query(30, ge=0, le=300),
 ):
     try:
-        rgba = read_upload_to_rgba(file)
+        rgba = read_upload_to_rgba(file, max_dimension=max_dimension)
         h, w = rgba.shape[:2]
 
         mask = alpha_to_mask(
@@ -360,15 +377,16 @@ async def alpha_preview(
 @app.post("/alpha/debug")
 async def alpha_debug(
     file: UploadFile = File(...),
+    max_dimension: int = Query(MAX_DIMENSION, ge=600, le=3000),
     alpha_threshold: int = Query(1, ge=0, le=255),
     smooth: bool = Query(True),
-    epsilon_ratio: float = Query(0.001, ge=0.0001, le=0.02),
-    smooth_window: int = Query(15, ge=5, le=51),
-    thickness: int = Query(2, ge=1, le=8),
+    epsilon_ratio: float = Query(0.00045, ge=0.00005, le=0.02),
+    smooth_window: int = Query(9, ge=3, le=51),
+    thickness: int = Query(2, ge=1, le=12),
     upscale: int = Query(4, ge=1, le=8),
 ):
     try:
-        rgba = read_upload_to_rgba(file)
+        rgba = read_upload_to_rgba(file, max_dimension=max_dimension)
 
         mask = alpha_to_mask(
             rgba,
@@ -399,16 +417,17 @@ async def alpha_debug(
 @app.post("/alpha/svg")
 async def alpha_svg(
     file: UploadFile = File(...),
+    max_dimension: int = Query(MAX_DIMENSION, ge=600, le=3000),
     alpha_threshold: int = Query(1, ge=0, le=255),
     smooth: bool = Query(True),
-    epsilon_ratio: float = Query(0.001, ge=0.0001, le=0.02),
-    smooth_window: int = Query(15, ge=5, le=51),
-    stroke_width: float = Query(2.0, ge=0.5, le=10.0),
+    epsilon_ratio: float = Query(0.00045, ge=0.00005, le=0.02),
+    smooth_window: int = Query(9, ge=3, le=51),
+    stroke_width: float = Query(3.5, ge=0.5, le=12.0),
     crop_to_subject: bool = Query(True),
     pad: int = Query(30, ge=0, le=300),
 ):
     try:
-        rgba = read_upload_to_rgba(file)
+        rgba = read_upload_to_rgba(file, max_dimension=max_dimension)
         h, w = rgba.shape[:2]
 
         mask = alpha_to_mask(
@@ -432,7 +451,11 @@ async def alpha_svg(
             pad=pad,
         )
 
-        return Response(content=svg, media_type="image/svg+xml")
+        return Response(
+            content=svg,
+            media_type="image/svg+xml",
+            headers={"Content-Disposition": 'attachment; filename="silhouette.svg"'},
+        )
 
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
