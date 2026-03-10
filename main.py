@@ -234,7 +234,7 @@ def render_preview_png(
         contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
     contour = anchor_contour_to_bottom(contour, height)
-    contour = open_contour_at_bottom(contour, height=height, bleed=20)
+    contour = open_contour_at_bottom(contour, height=height, bleed=0)
 
     W = width * upscale
     H = height * upscale
@@ -332,7 +332,7 @@ def contour_to_svg(
         contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
     contour = anchor_contour_to_bottom(contour, height)
-    contour = open_contour_at_bottom(contour, height=height, bleed=20)
+    contour = open_contour_at_bottom(contour, height=height, bleed=0)
 
     pts = contour[:, 0, :]
 
