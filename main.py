@@ -49,12 +49,11 @@ def resize_if_needed_rgba(rgba: np.ndarray, max_dimension: int = MAX_DIMENSION) 
 
 def open_contour_at_bottom(contour: np.ndarray, height: int, bleed: int = 40) -> np.ndarray:
     """
-    Open contour at bottom and force both ends to same bottom level.
+    Open contour at bottom and force both ends to drop vertically below canvas.
+    This removes the visible bottom closing line and avoids diagonal tails.
     """
-
     pts = contour[:, 0, :].astype(np.int32)
 
-    # find two lowest points
     ys = pts[:, 1]
     idx_sorted = np.argsort(ys)[::-1]
 
@@ -63,11 +62,14 @@ def open_contour_at_bottom(contour: np.ndarray, height: int, bleed: int = 40) ->
 
     a, b = sorted([i1, i2])
 
-    # open contour between bottom points
     open_pts = np.vstack([pts[b:], pts[:a+1]])
 
-    # force both endpoints to exact bottom
     bottom_y = height + bleed
+
+    # make both ends vertical by locking x to neighbour points
+    if len(open_pts) >= 2:
+        open_pts[0, 0] = open_pts[1, 0]
+        open_pts[-1, 0] = open_pts[-2, 0]
 
     open_pts[0, 1] = bottom_y
     open_pts[-1, 1] = bottom_y
