@@ -395,11 +395,28 @@ def draw_svg_on_pdf(
     pdf_canvas.restoreState()
 
 
-def generate_poster_pdf(svg_string: str, name: str) -> bytes:
-    page_w = 500 * mm
-    page_h = 700 * mm
-    top_band_h = 115 * mm
+def generate_poster_pdf(
+    svg_string: str,
+    name: str,
+    page_w_mm: float = 500,
+    page_h_mm: float = 700,
+) -> bytes:
+    # master layout = 500 x 700 mm
+    master_w_mm = 500
+    master_h_mm = 700
+
+    page_w = page_w_mm * mm
+    page_h = page_h_mm * mm
+
+    scale_factor = min(page_w_mm / master_w_mm, page_h_mm / master_h_mm)
+
+    # scaled layout values from master
+    top_band_h = 115 * mm * scale_factor
+    title_font_size = 35 * scale_factor
     lower_h = page_h - top_band_h
+
+    logo_width = 50 * mm * scale_factor
+    logo_y = 50 * mm * scale_factor
 
     tmp_svg = tempfile.NamedTemporaryFile(delete=False, suffix=".svg")
     tmp_svg.write(svg_string.encode("utf-8"))
@@ -416,9 +433,9 @@ def generate_poster_pdf(svg_string: str, name: str) -> bytes:
     c.setFillColorRGB(0.95, 0.93, 0.90)
     c.rect(0, 0, page_w, page_h, fill=1, stroke=0)
 
-    # title centered in top band
+    # title
     c.setFillColorRGB(0, 0, 0)
-    c.setFont(TITLE_FONT, 35)
+    c.setFont(TITLE_FONT, title_font_size)
     c.drawCentredString(page_w / 2, page_h - (top_band_h / 2), name)
 
     # silhouette placement
@@ -426,43 +443,37 @@ def generate_poster_pdf(svg_string: str, name: str) -> bytes:
     raw_w = max_x - min_x
     raw_h = max_y - min_y
 
-    scale = min(
+    silhouette_scale = min(
         (page_w * 0.82) / raw_w,
         (lower_h * 0.98) / raw_h,
     )
 
-    drawing.scale(scale, scale)
+    drawing.scale(silhouette_scale, silhouette_scale)
 
     min_x, min_y, max_x, max_y = drawing.getBounds()
     draw_w = max_x - min_x
     draw_h = max_y - min_y
 
-    # center horizontally, anchor bottom to page bottom
     x = (page_w - draw_w) / 2 - min_x
-    y = -min_y
+    y = -min_y  # anchored to bottom
 
     c.saveState()
     c.translate(x, y)
     renderPDF.draw(drawing, c, 0, 0)
     c.restoreState()
 
-    # logo svg
-  logo_width = 50 * mm
-logo_x = (page_w - logo_width) / 2
-logo_y = 50 * mm
+    # logo svg - width controlled, height automatic
+    if os.path.exists("assets/avart-logo.svg"):
+        logo = svg2rlg("assets/avart-logo.svg")
+        if logo is not None:
+            logo_scale = logo_width / logo.width
+            logo.scale(logo_scale, logo_scale)
 
-if os.path.exists("assets/avart-logo.svg"):
-    drawing = svg2rlg("assets/avart-logo.svg")
+            logo_bounds = logo.getBounds()
+            logo_w = logo_bounds[2] - logo_bounds[0]
 
-    scale = logo_width / drawing.width
-    drawing.scale(scale, scale)
-
-    renderPDF.draw(
-        drawing,
-        c,
-        logo_x,
-        logo_y
-    )
+            logo_x = (page_w - logo_w) / 2
+            renderPDF.draw(logo, c, logo_x, logo_y)
 
     c.showPage()
     c.save()
@@ -610,6 +621,8 @@ async def alpha_svg(
 async def poster_pdf(
     file: UploadFile = File(...),
     name: str = Query("Clara & Ellinor"),
+    page_w_mm: float = Query(500),
+    page_h_mm: float = Query(700),
     max_dimension: int = Query(MAX_DIMENSION, ge=600, le=3000),
     alpha_threshold: int = Query(1, ge=0, le=255),
     smooth: bool = Query(True),
@@ -623,11 +636,7 @@ async def poster_pdf(
         rgba = read_upload_to_rgba(file, max_dimension=max_dimension)
         h, w = rgba.shape[:2]
 
-        mask = alpha_to_mask(
-            rgba,
-            alpha_threshold=alpha_threshold,
-            smooth=smooth,
-        )
+        mask = alpha_to_mask(rgba, alpha_threshold=alpha_threshold, smooth=smooth)
 
         contour = get_smoothed_outer_contour(
             mask,
@@ -644,7 +653,7 @@ async def poster_pdf(
             pad=pad,
         )
 
-        pdf_bytes = generate_poster_pdf(svg, name)
+        pdf_bytes = generate_poster_pdf(svg, name, page_w_mm, page_h_mm)
 
         return Response(
             content=pdf_bytes,
