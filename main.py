@@ -612,7 +612,11 @@ async def poster_pdf(
         rgba = read_upload_to_rgba(file, max_dimension=max_dimension)
         h, w = rgba.shape[:2]
 
-        mask = alpha_to_mask(rgba, alpha_threshold=alpha_threshold, smooth=smooth)
+        mask = alpha_to_mask(
+            rgba,
+            alpha_threshold=alpha_threshold,
+            smooth=smooth,
+        )
 
         contour = get_smoothed_outer_contour(
             mask,
@@ -629,13 +633,13 @@ async def poster_pdf(
             pad=pad,
         )
 
-pdf_bytes = generate_poster_pdf(svg, name)
+        pdf_bytes = generate_poster_pdf(svg, name)
 
-return Response(
-    content=pdf_bytes,
-    media_type="application/pdf",
-    headers={"Content-Disposition": 'attachment; filename="poster.pdf"'},
-)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="poster.pdf"'},
+        )
 
-except Exception as e:
-    return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
