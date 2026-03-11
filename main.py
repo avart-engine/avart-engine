@@ -245,7 +245,7 @@ def render_preview_png(
     pad: int = 30,
 ) -> bytes:
     if crop_to_subject:
-    contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
+        contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
     contour = anchor_contour_to_bottom(contour, height)
     contour = open_contour_at_bottom(contour, height=height, bleed=0)
