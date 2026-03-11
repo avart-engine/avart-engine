@@ -362,7 +362,6 @@ def contour_to_svg(
 width="{width}"
 height="{height}"
 viewBox="0 0 {width} {height}">
-  <rect width="100%" height="100%" fill="white"/>
   <path
     d="{path}"
     fill="none"
@@ -397,7 +396,10 @@ def draw_svg_on_pdf(
 
 
 def generate_poster_pdf(svg_string: str, name: str) -> bytes:
-    width, height = A3
+    page_w = 500 * mm
+    page_h = 700 * mm
+    top_band_h = 115 * mm
+    lower_h = page_h - top_band_h
 
     tmp_svg = tempfile.NamedTemporaryFile(delete=False, suffix=".svg")
     tmp_svg.write(svg_string.encode("utf-8"))
@@ -408,36 +410,36 @@ def generate_poster_pdf(svg_string: str, name: str) -> bytes:
         raise ValueError("Could not convert silhouette SVG to drawing")
 
     buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-
-    c = canvas.Canvas(buffer.name, pagesize=A3)
+    c = canvas.Canvas(buffer.name, pagesize=(page_w, page_h))
 
     # background
     c.setFillColorRGB(0.95, 0.93, 0.90)
-    c.rect(0, 0, width, height, fill=1, stroke=0)
+    c.rect(0, 0, page_w, page_h, fill=1, stroke=0)
 
-    # title
+    # title centered in top band
     c.setFillColorRGB(0, 0, 0)
     c.setFont(TITLE_FONT, 35)
-    c.drawCentredString(width / 2, height - 60, name)
+    c.drawCentredString(page_w / 2, page_h - (top_band_h / 2), name)
 
-        # silhouette placement
+    # silhouette placement
+    min_x, min_y, max_x, max_y = drawing.getBounds()
+    raw_w = max_x - min_x
+    raw_h = max_y - min_y
+
     scale = min(
-        (width * 0.72) / drawing.width,
-        (height * 0.62) / drawing.height,
+        (page_w * 0.82) / raw_w,
+        (lower_h * 0.98) / raw_h,
     )
 
-    drawing.width *= scale
-    drawing.height *= scale
     drawing.scale(scale, scale)
 
-    bounds = drawing.getBounds()
-    min_x, min_y, max_x, max_y = bounds
+    min_x, min_y, max_x, max_y = drawing.getBounds()
+    draw_w = max_x - min_x
+    draw_h = max_y - min_y
 
-    drawing_w = max_x - min_x
-    drawing_h = max_y - min_y
-
-    x = (width - drawing_w) / 2 - min_x
-    y = (height - drawing_h) / 2 - min_y - 10
+    # center horizontally, anchor bottom to page bottom
+    x = (page_w - draw_w) / 2 - min_x
+    y = -min_y
 
     c.saveState()
     c.translate(x, y)
@@ -447,7 +449,7 @@ def generate_poster_pdf(svg_string: str, name: str) -> bytes:
     # logo svg
     logo_width = 35 * mm
     logo_height = 12 * mm
-    logo_x = (width - logo_width) / 2
+    logo_x = (page_w - logo_width) / 2
     logo_y = 18 * mm
 
     if os.path.exists("assets/avart-logo.svg"):
@@ -477,7 +479,6 @@ def generate_poster_pdf(svg_string: str, name: str) -> bytes:
         pass
 
     return pdf_bytes
-
 
 # --------------------------------------------------
 # API
