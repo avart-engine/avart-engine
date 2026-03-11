@@ -447,20 +447,22 @@ def generate_poster_pdf(svg_string: str, name: str) -> bytes:
     c.restoreState()
 
     # logo svg
-    logo_width = 35 * mm
-    logo_height = 12 * mm
-    logo_x = (page_w - logo_width) / 2
-    logo_y = 18 * mm
+  logo_width = 50 * mm
+logo_x = (page_w - logo_width) / 2
+logo_y = 50 * mm
 
-    if os.path.exists("assets/avart-logo.svg"):
-        draw_svg_on_pdf(
-            c,
-            "assets/avart-logo.svg",
-            logo_x,
-            logo_y,
-            logo_width,
-            logo_height,
-        )
+if os.path.exists("assets/avart-logo.svg"):
+    drawing = svg2rlg("assets/avart-logo.svg")
+
+    scale = logo_width / drawing.width
+    drawing.scale(scale, scale)
+
+    renderPDF.draw(
+        drawing,
+        c,
+        logo_x,
+        logo_y
+    )
 
     c.showPage()
     c.save()
