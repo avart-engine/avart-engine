@@ -66,6 +66,20 @@ def health():
 # Helpers
 # --------------------------------------------------
 
+def anchor_contour_to_bottom(contour: np.ndarray, height: int) -> np.ndarray:
+    pts = contour[:, 0, :].astype(np.float32)
+
+    ys = pts[:, 1]
+    max_y = ys.max()
+
+    # hvor meget den skal flyttes ned
+    offset = (height - 1) - max_y
+
+    pts[:, 1] += offset
+
+    return pts.reshape(-1, 1, 2)
+
+
 def resize_if_needed_rgba(rgba: np.ndarray, max_dimension: int = MAX_DIMENSION) -> np.ndarray:
     h, w = rgba.shape[:2]
     longest = max(h, w)
@@ -330,15 +344,14 @@ def contour_to_svg(
     pad: int = 30,
 ) -> str:
     if crop_to_subject:
-        contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
+    contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
-    contour = anchor_contour_to_bottom(contour, height)
-    contour = open_contour_at_bottom(contour, height=height, bleed=0)
+contour = anchor_contour_to_bottom(contour, height)
+contour = open_contour_at_bottom(contour, height=height, bleed=0)
+pts = contour[:, 0, :]
 
-    pts = contour[:, 0, :]
-
-    if len(pts) < 3:
-        raise ValueError("Contour too small")
+if len(pts) < 3:
+    raise ValueError("Contour too small")
 
     def midpoint(p1, p2):
         return ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
