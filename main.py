@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import cv2
-import numpy as np
+import os
 import tempfile
 
+import cv2
+import numpy as np
 from fastapi import FastAPI, File, UploadFile, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
@@ -17,13 +18,15 @@ from reportlab.graphics import renderPDF
 
 from svglib.svglib import svg2rlg
 
-# register custom font
-pdfmetrics.registerFont(TTFont("TheSeasonsBold", "fonts/TheSeasons-Bold.otf"))
+
+# --------------------------------------------------
+# App
+# --------------------------------------------------
 
 app = FastAPI(
     title="avart-engine",
-    version="0.9.0",
-    description="Alpha-based silhouette engine with auto resize and simplify-after-smoothing",
+    version="1.0.0",
+    description="Avart silhouette engine with SVG + PDF poster output",
 )
 
 app.add_middleware(
@@ -36,6 +39,23 @@ app.add_middleware(
 
 MAX_DIMENSION = 1600
 
+
+# --------------------------------------------------
+# Optional custom font
+# --------------------------------------------------
+
+TITLE_FONT = "Helvetica-Bold"
+
+try:
+    pdfmetrics.registerFont(TTFont("TheSeasonsBold", "fonts/TheSeasons-Bold.otf"))
+    TITLE_FONT = "TheSeasonsBold"
+except Exception:
+    TITLE_FONT = "Helvetica-Bold"
+
+
+# --------------------------------------------------
+# Health
+# --------------------------------------------------
 
 @app.get("/health")
 def health():
@@ -57,84 +77,11 @@ def resize_if_needed_rgba(rgba: np.ndarray, max_dimension: int = MAX_DIMENSION) 
     new_w = max(1, int(round(w * scale)))
     new_h = max(1, int(round(h * scale)))
 
-    resized = cv2.resize(rgba, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    return resized
-    
-
-def draw_svg_on_pdf(c, svg_path: str, x: float, y: float, max_width: float, max_height: float):
-    drawing = svg2rlg(svg_path)
-
-    if drawing is None:
-        raise ValueError(f"Could not load SVG: {svg_path}")
-
-    scale = min(
-        max_width / drawing.width,
-        max_height / drawing.height
-    )
-
-    c.saveState()
-    c.translate(x, y)
-    c.scale(scale, scale)
-    renderPDF.draw(drawing, c, 0, 0)
-    c.restoreState()
+    return cv2.resize(rgba, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
 
-def open_contour_at_bottom(contour: np.ndarray, height: int, bleed: int = 0) -> np.ndarray:
-    """
-    Open contour at bottom by cutting between left/right bottom points
-    and placing both endpoints exactly on the bottom line.
-    """
-    pts = contour[:, 0, :].astype(np.int32)
-
-    ys = pts[:, 1]
-    max_y = ys.max()
-
-    # points close to the bottom (band)
-    band = np.where(ys >= max_y - 15)[0]
-    if len(band) < 2:
-        band = np.where(ys >= max_y - 5)[0]
-
-    # choose leftmost and rightmost in bottom band
-    xs = pts[band, 0]
-    i_left = band[np.argmin(xs)]
-    i_right = band[np.argmax(xs)]
-
-    a, b = sorted([i_left, i_right])
-
-    # open contour between them
-    open_pts = np.vstack([pts[b:], pts[:a + 1]])
-
-    bottom_y = height - 1 + bleed
-
-    open_pts[0, 1] = bottom_y
-    open_pts[-1, 1] = bottom_y
-
-    return open_pts.reshape(-1, 1, 2)
-
-
-def anchor_contour_to_bottom(contour: np.ndarray, height: int) -> np.ndarray:
-    """
-    Move contour so its lowest point sits exactly on the canvas bottom.
-    """
-    pts = contour[:, 0, :]
-
-    lowest_y = pts[:,1].max()
-    shift = (height - 1) - lowest_y
-
-    pts[:,1] = pts[:,1] + shift
-
-    return contour
-
-
-def read_upload_to_rgba(
-    upload: UploadFile,
-    max_dimension: int = MAX_DIMENSION,
-) -> np.ndarray:
-    """
-    Read uploaded image as RGBA using OpenCV, then auto-resize if needed.
-    """
+def read_upload_to_rgba(upload: UploadFile, max_dimension: int = MAX_DIMENSION) -> np.ndarray:
     data = upload.file.read()
-
     if not data:
         raise ValueError("Empty file")
 
@@ -155,9 +102,7 @@ def read_upload_to_rgba(
         raise ValueError("Image must have 4 channels")
 
     rgba = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
-    rgba = resize_if_needed_rgba(rgba, max_dimension=max_dimension)
-
-    return rgba
+    return resize_if_needed_rgba(rgba, max_dimension=max_dimension)
 
 
 def alpha_to_mask(
@@ -179,10 +124,6 @@ def alpha_to_mask(
 
 
 def smooth_contour_points(points: np.ndarray, smooth_window: int = 9) -> np.ndarray:
-    """
-    Closed moving-average smoothing on contour points.
-    points shape: (N, 2)
-    """
     n = len(points)
     if n < smooth_window or n < 10:
         return points.copy()
@@ -206,11 +147,6 @@ def get_smoothed_outer_contour(
     epsilon_ratio: float = 0.00045,
     smooth_window: int = 9,
 ) -> np.ndarray:
-    """
-    1) Find contour
-    2) Smooth contour
-    3) Simplify contour AFTER smoothing
-    """
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
     if not contours:
@@ -219,12 +155,9 @@ def get_smoothed_outer_contour(
     largest = max(contours, key=cv2.contourArea)
     points = largest[:, 0, :].astype(np.float32)
 
-    # Smooth first
     smoothed = smooth_contour_points(points, smooth_window=smooth_window)
-
     smoothed_contour = np.round(smoothed).astype(np.int32).reshape(-1, 1, 2)
 
-    # Simplify after smoothing
     peri = cv2.arcLength(smoothed_contour, True)
     eps = max(0.5, peri * epsilon_ratio)
     simplified = cv2.approxPolyDP(smoothed_contour, eps, True)
@@ -252,6 +185,42 @@ def crop_contour_to_subject(
     return cropped, (x2 - x1), (y2 - y1)
 
 
+def anchor_contour_to_bottom(contour: np.ndarray, height: int) -> np.ndarray:
+    pts = contour[:, 0, :]
+    lowest_y = pts[:, 1].max()
+    shift = (height - 1) - lowest_y
+    pts[:, 1] = pts[:, 1] + shift
+    return contour
+
+
+def open_contour_at_bottom(contour: np.ndarray, height: int, bleed: int = 0) -> np.ndarray:
+    pts = contour[:, 0, :].astype(np.int32)
+
+    ys = pts[:, 1]
+    max_y = ys.max()
+
+    band = np.where(ys >= max_y - 15)[0]
+    if len(band) < 2:
+        band = np.where(ys >= max_y - 5)[0]
+
+    if len(band) < 2:
+        idx_sorted = np.argsort(ys)[::-1]
+        i_left, i_right = idx_sorted[0], idx_sorted[1]
+    else:
+        xs = pts[band, 0]
+        i_left = band[np.argmin(xs)]
+        i_right = band[np.argmax(xs)]
+
+    a, b = sorted([i_left, i_right])
+    open_pts = np.vstack([pts[b:], pts[:a + 1]])
+
+    bottom_y = height - 1 + bleed
+    open_pts[0, 1] = bottom_y
+    open_pts[-1, 1] = bottom_y
+
+    return open_pts.reshape(-1, 1, 2)
+
+
 def render_preview_png(
     contour: np.ndarray,
     width: int,
@@ -261,7 +230,6 @@ def render_preview_png(
     crop_to_subject: bool = False,
     pad: int = 30,
 ) -> bytes:
-
     if crop_to_subject:
         contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
@@ -271,14 +239,14 @@ def render_preview_png(
     W = width * upscale
     H = height * upscale
 
-    canvas = np.full((H, W, 3), 255, dtype=np.uint8)
+    canvas_img = np.full((H, W, 3), 255, dtype=np.uint8)
 
     pts = contour.copy().astype(np.int32)
     pts[:, 0, 0] *= upscale
     pts[:, 0, 1] *= upscale
 
     cv2.polylines(
-        canvas,
+        canvas_img,
         [pts],
         isClosed=False,
         color=(0, 0, 0),
@@ -286,13 +254,14 @@ def render_preview_png(
         lineType=cv2.LINE_AA,
     )
 
-    canvas = cv2.resize(canvas, (width, height), interpolation=cv2.INTER_AREA)
+    canvas_img = cv2.resize(canvas_img, (width, height), interpolation=cv2.INTER_AREA)
 
-    ok, png = cv2.imencode(".png", canvas)
+    ok, png = cv2.imencode(".png", canvas_img)
     if not ok:
         raise ValueError("Could not encode PNG")
 
     return png.tobytes()
+
 
 def render_debug_png(
     rgba: np.ndarray,
@@ -356,7 +325,7 @@ def contour_to_svg(
     contour: np.ndarray,
     width: int,
     height: int,
-    stroke_width: float = 2.0,
+    stroke_width: float = 3.5,
     crop_to_subject: bool = False,
     pad: int = 30,
 ) -> str:
@@ -375,7 +344,6 @@ def contour_to_svg(
         return ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
 
     d = []
-
     for i in range(len(pts) - 1):
         p0 = pts[i]
         p1 = pts[i + 1]
@@ -407,6 +375,102 @@ viewBox="0 0 {width} {height}">
     return svg
 
 
+def draw_svg_on_pdf(
+    pdf_canvas,
+    svg_path: str,
+    x: float,
+    y: float,
+    max_width: float,
+    max_height: float,
+):
+    drawing = svg2rlg(svg_path)
+    if drawing is None:
+        raise ValueError(f"Could not load SVG: {svg_path}")
+
+    scale = min(max_width / drawing.width, max_height / drawing.height)
+
+    pdf_canvas.saveState()
+    pdf_canvas.translate(x, y)
+    pdf_canvas.scale(scale, scale)
+    renderPDF.draw(drawing, pdf_canvas, 0, 0)
+    pdf_canvas.restoreState()
+
+
+def generate_poster_pdf(svg_string: str, name: str) -> bytes:
+    width, height = A3
+
+    tmp_svg = tempfile.NamedTemporaryFile(delete=False, suffix=".svg")
+    tmp_svg.write(svg_string.encode("utf-8"))
+    tmp_svg.close()
+
+    drawing = svg2rlg(tmp_svg.name)
+    if drawing is None:
+        raise ValueError("Could not convert silhouette SVG to drawing")
+
+    buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+
+    c = canvas.Canvas(buffer.name, pagesize=A3)
+
+    # background
+    c.setFillColorRGB(0.95, 0.93, 0.90)
+    c.rect(0, 0, width, height, fill=1, stroke=0)
+
+    # title
+    c.setFillColorRGB(0, 0, 0)
+    c.setFont(TITLE_FONT, 35)
+    c.drawCentredString(width / 2, height - 60, name)
+
+    # silhouette placement
+    scale = min(
+        (width * 0.72) / drawing.width,
+        (height * 0.62) / drawing.height,
+    )
+    drawing.width *= scale
+    drawing.height *= scale
+
+    x = (width - drawing.width) / 2
+    y = (height - drawing.height) / 2 - 30
+
+    c.saveState()
+    c.translate(x, y)
+    renderPDF.draw(drawing, c, 0, 0)
+    c.restoreState()
+
+    # logo svg
+    logo_width = 35 * mm
+    logo_height = 12 * mm
+    logo_x = (width - logo_width) / 2
+    logo_y = 18 * mm
+
+    if os.path.exists("assets/avart-logo.svg"):
+        draw_svg_on_pdf(
+            c,
+            "assets/avart-logo.svg",
+            logo_x,
+            logo_y,
+            logo_width,
+            logo_height,
+        )
+
+    c.showPage()
+    c.save()
+
+    with open(buffer.name, "rb") as f:
+        pdf_bytes = f.read()
+
+    try:
+        os.unlink(tmp_svg.name)
+    except Exception:
+        pass
+
+    try:
+        os.unlink(buffer.name)
+    except Exception:
+        pass
+
+    return pdf_bytes
+
+
 # --------------------------------------------------
 # API
 # --------------------------------------------------
@@ -428,11 +492,7 @@ async def alpha_preview(
         rgba = read_upload_to_rgba(file, max_dimension=max_dimension)
         h, w = rgba.shape[:2]
 
-        mask = alpha_to_mask(
-            rgba,
-            alpha_threshold=alpha_threshold,
-            smooth=smooth,
-        )
+        mask = alpha_to_mask(rgba, alpha_threshold=alpha_threshold, smooth=smooth)
 
         contour = get_smoothed_outer_contour(
             mask,
@@ -470,11 +530,7 @@ async def alpha_debug(
     try:
         rgba = read_upload_to_rgba(file, max_dimension=max_dimension)
 
-        mask = alpha_to_mask(
-            rgba,
-            alpha_threshold=alpha_threshold,
-            smooth=smooth,
-        )
+        mask = alpha_to_mask(rgba, alpha_threshold=alpha_threshold, smooth=smooth)
 
         contour = get_smoothed_outer_contour(
             mask,
@@ -512,11 +568,7 @@ async def alpha_svg(
         rgba = read_upload_to_rgba(file, max_dimension=max_dimension)
         h, w = rgba.shape[:2]
 
-        mask = alpha_to_mask(
-            rgba,
-            alpha_threshold=alpha_threshold,
-            smooth=smooth,
-        )
+        mask = alpha_to_mask(rgba, alpha_threshold=alpha_threshold, smooth=smooth)
 
         contour = get_smoothed_outer_contour(
             mask,
@@ -543,78 +595,6 @@ async def alpha_svg(
         return JSONResponse({"error": str(e)}, status_code=400)
 
 
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A3
-from reportlab.lib.units import mm
-from svglib.svglib import svg2rlg
-from reportlab.graphics import renderPDF
-import tempfile
-
-
-def generate_poster_pdf(svg_string: str, name: str) -> bytes:
-
-    width, height = A3
-
-    tmp_svg = tempfile.NamedTemporaryFile(delete=False, suffix=".svg")
-    tmp_svg.write(svg_string.encode("utf-8"))
-    tmp_svg.close()
-
-    drawing = svg2rlg(tmp_svg.name)
-
-    buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-
-    c = canvas.Canvas(buffer.name, pagesize=A3)
-
-    # baggrund
-    c.setFillColorRGB(0.95, 0.93, 0.90)
-    c.rect(0, 0, width, height, fill=1)
-
-    # navn
-    c.setFillColorRGB(0,0,0)
-    c.setFont("TheSeasonsBold", 35)
-    c.drawCentredString(width/2, height-60, name)
-
-        # placer silhouette - intelligent scale
-    scale = min(
-        (width * 0.72) / drawing.width,
-        (height * 0.62) / drawing.height
-    )
-
-    drawing.width *= scale
-    drawing.height *= scale
-
-    x = (width - drawing.width) / 2
-    y = (height - drawing.height) / 2 - 30
-
-    c.saveState()
-    c.translate(x, y)
-    renderPDF.draw(drawing, c, 0, 0)
-    c.restoreState()
-
-    # logo svg
-    logo_width = 35 * mm
-    logo_height = 12 * mm
-    logo_x = (width - logo_width) / 2
-    logo_y = 18 * mm
-
-    draw_svg_on_pdf(
-        c,
-        "assets/avart-logo.svg",
-        logo_x,
-        logo_y,
-        logo_width,
-        logo_height,
-    )
-
-    c.showPage()
-    c.save()
-
-    with open(buffer.name, "rb") as f:
-        pdf_bytes = f.read()
-
-    return pdf_bytes
-
-
 @app.post("/poster/pdf")
 async def poster_pdf(
     file: UploadFile = File(...),
@@ -632,11 +612,7 @@ async def poster_pdf(
         rgba = read_upload_to_rgba(file, max_dimension=max_dimension)
         h, w = rgba.shape[:2]
 
-        mask = alpha_to_mask(
-            rgba,
-            alpha_threshold=alpha_threshold,
-            smooth=smooth,
-        )
+        mask = alpha_to_mask(rgba, alpha_threshold=alpha_threshold, smooth=smooth)
 
         contour = get_smoothed_outer_contour(
             mask,
@@ -647,19 +623,4 @@ async def poster_pdf(
         svg = contour_to_svg(
             contour=contour,
             width=w,
-            height=h,
-            stroke_width=stroke_width,
-            crop_to_subject=crop_to_subject,
-            pad=pad,
-        )
-
-        pdf_bytes = generate_poster_pdf(svg, name)
-
-        return Response(
-            content=pdf_bytes,
-            media_type="application/pdf",
-            headers={"Content-Disposition": 'attachment; filename="poster.pdf"'},
-        )
-
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+            height=h
