@@ -6,6 +6,27 @@ import tempfile
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, UploadFile, Query
+
+
+# --------------------------------
+# AVART DESIGN SETTINGS
+# --------------------------------
+
+BG_COLOR = (0.95, 0.93, 0.90)
+
+PAGE_W_MM = 500
+PAGE_H_MM = 700
+
+TOP_BAND_MM = 115
+
+TITLE_FONT_SIZE = 35
+
+LOGO_WIDTH_MM = 50
+LOGO_BOTTOM_MM = 50
+
+DEFAULT_STROKE_WIDTH = 3.5
+
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
 
