@@ -334,7 +334,6 @@ def render_debug_png(
 
     return png.tobytes()
 
-
 def contour_to_svg(
     contour: np.ndarray,
     width: int,
@@ -350,23 +349,12 @@ def contour_to_svg(
     contour = open_contour_at_bottom(contour, height=height, bleed=0)
     pts = contour[:, 0, :]
 
-    if len(pts) < 3:
+    if len(pts) < 2:
         raise ValueError("Contour too small")
 
-    def midpoint(p1, p2):
-        return ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
-
-    d = []
-    for i in range(len(pts) - 1):
-        p0 = pts[i]
-        p1 = pts[i + 1]
-        mx, my = midpoint(p0, p1)
-
-        if i == 0:
-            d.append(f"M {p0[0]:.2f} {p0[1]:.2f}")
-            d.append(f"Q {p0[0]:.2f} {p0[1]:.2f} {mx:.2f} {my:.2f}")
-        else:
-            d.append(f"Q {p0[0]:.2f} {p0[1]:.2f} {mx:.2f} {my:.2f}")
+    d = [f"M {pts[0][0]:.2f} {pts[0][1]:.2f}"]
+    for p in pts[1:]:
+        d.append(f"L {p[0]:.2f} {p[1]:.2f}")
 
     path = " ".join(d)
 
@@ -384,7 +372,6 @@ viewBox="0 0 {width} {height}">
     stroke-linejoin="round"/>
 </svg>
 '''
-
     return svg
 
 def draw_svg_on_pdf(
