@@ -31,7 +31,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
 
 from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A3
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -416,28 +415,13 @@ def draw_svg_on_pdf(
     pdf_canvas.restoreState()
 
 
-def generate_poster_pdf(
-    svg_string: str,
-    name: str,
-    page_w_mm: float = 500,
-    page_h_mm: float = 700,
-) -> bytes:
-    # master layout = 500 x 700 mm
-    master_w_mm = 500
-    master_h_mm = 700
+def generate_poster_pdf(svg_string: str, name: str) -> bytes:
+    width = PAGE_W_MM * mm
+    height = PAGE_H_MM * mm
 
-    page_w = page_w_mm * mm
-    page_h = page_h_mm * mm
-
-    scale_factor = min(page_w_mm / master_w_mm, page_h_mm / master_h_mm)
-
-    # scaled layout values from master
-    top_band_h = 115 * mm * scale_factor
-    title_font_size = 35 * scale_factor
-    lower_h = page_h - top_band_h
-
-    logo_width = 50 * mm * scale_factor
-    logo_y = 50 * mm * scale_factor
+    top_band_h = TOP_BAND_MM * mm
+    logo_width = LOGO_WIDTH_MM * mm
+    logo_bottom = LOGO_BOTTOM_MM * mm
 
     tmp_svg = tempfile.NamedTemporaryFile(delete=False, suffix=".svg")
     tmp_svg.write(svg_string.encode("utf-8"))
@@ -448,52 +432,61 @@ def generate_poster_pdf(
         raise ValueError("Could not convert silhouette SVG to drawing")
 
     buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    c = canvas.Canvas(buffer.name, pagesize=(page_w, page_h))
+    c = canvas.Canvas(buffer.name, pagesize=(width, height))
 
     # background
-    c.setFillColorRGB(0.95, 0.93, 0.90)
-    c.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+    c.setFillColorRGB(*BG_COLOR)
+    c.rect(0, 0, width, height, fill=1, stroke=0)
 
     # title
     c.setFillColorRGB(0, 0, 0)
-    c.setFont(TITLE_FONT, title_font_size)
-    c.drawCentredString(page_w / 2, page_h - (top_band_h / 2), name)
+    c.setFont(TITLE_FONT, TITLE_FONT_SIZE)
+    c.drawCentredString(width / 2, height - (top_band_h / 2), name)
 
-    # silhouette placement
+    # silhouette area
+    silhouette_top_y = height - top_band_h
+    silhouette_bottom_y = 0
+    silhouette_height = silhouette_top_y - silhouette_bottom_y
+
+    # original bounds
     min_x, min_y, max_x, max_y = drawing.getBounds()
     raw_w = max_x - min_x
     raw_h = max_y - min_y
 
+    # scale silhouette to fit width and full lower area height
     silhouette_scale = min(
-        (page_w * 0.82) / raw_w,
-        (lower_h * 0.98) / raw_h,
+        (width * 0.82) / raw_w,
+        (silhouette_height * 0.98) / raw_h,
     )
-
     drawing.scale(silhouette_scale, silhouette_scale)
 
+    # recalc bounds after scaling
     min_x, min_y, max_x, max_y = drawing.getBounds()
     draw_w = max_x - min_x
     draw_h = max_y - min_y
 
-    x = (page_w - draw_w) / 2 - min_x
-    y = -min_y  # anchored to bottom
+    # center horizontally, anchor silhouette to bottom
+    x = (width - draw_w) / 2 - min_x
+    y = -min_y
 
     c.saveState()
     c.translate(x, y)
     renderPDF.draw(drawing, c, 0, 0)
     c.restoreState()
 
-    # logo svg - width controlled, height automatic
+    # logo
     if os.path.exists("assets/avart-logo.svg"):
         logo = svg2rlg("assets/avart-logo.svg")
         if logo is not None:
             logo_scale = logo_width / logo.width
             logo.scale(logo_scale, logo_scale)
 
-            logo_bounds = logo.getBounds()
-            logo_w = logo_bounds[2] - logo_bounds[0]
+            l_min_x, l_min_y, l_max_x, l_max_y = logo.getBounds()
+            logo_w = l_max_x - l_min_x
 
-            logo_x = (page_w - logo_w) / 2
+            logo_x = (width - logo_w) / 2 - l_min_x
+            logo_y = logo_bottom - l_min_y
+
             renderPDF.draw(logo, c, logo_x, logo_y)
 
     c.showPage()
@@ -513,7 +506,6 @@ def generate_poster_pdf(
         pass
 
     return pdf_bytes
-
 # --------------------------------------------------
 # API
 # --------------------------------------------------
