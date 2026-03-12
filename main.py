@@ -106,7 +106,7 @@ def remove_background_if_needed(upload: UploadFile, max_dimension: int = MAX_DIM
             return resize_if_needed_rgba(rgba, max_dimension=max_dimension)
 
     # Ellers: fjern baggrund med rembg
-    output = remove(data)
+    output = remove(data, model_name="u2netp")
 
     arr_out = np.frombuffer(output, np.uint8)
     img_out = cv2.imdecode(arr_out, cv2.IMREAD_UNCHANGED)
