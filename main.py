@@ -441,7 +441,7 @@ def generate_poster_pdf(svg_string: str, name: str) -> bytes:
     # title
     c.setFillColorRGB(0, 0, 0)
     c.setFont(TITLE_FONT, TITLE_FONT_SIZE)
-    c.drawCentredString(width / 2, height - (top_band_h / 2), name)
+    c.drawCentredString(width / 2, height - (top_band_h / 2) - (TITLE_FONT_SIZE * 0.35), name)
 
     # silhouette area
     silhouette_top_y = height - top_band_h
