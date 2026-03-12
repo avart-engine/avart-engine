@@ -346,12 +346,12 @@ def contour_to_svg(
     if crop_to_subject:
         contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
-contour = anchor_contour_to_bottom(contour, height)
-contour = open_contour_at_bottom(contour, height=height, bleed=0)
-pts = contour[:, 0, :]
+    contour = anchor_contour_to_bottom(contour, height)
+    contour = open_contour_at_bottom(contour, height=height, bleed=0)
+    pts = contour[:, 0, :]
 
-if len(pts) < 3:
-    raise ValueError("Contour too small")
+    if len(pts) < 3:
+        raise ValueError("Contour too small")
 
     def midpoint(p1, p2):
         return ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
