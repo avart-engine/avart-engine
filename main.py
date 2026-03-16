@@ -13,6 +13,9 @@ from fastapi import FastAPI, File, UploadFile, Query
 # AVART DESIGN SETTINGS
 # --------------------------------
 
+REMBG_MODEL = "u2netp"
+_rembg_session = None
+
 BG_COLOR = (0.95, 0.93, 0.90)
 
 PAGE_W_MM = 500
@@ -87,6 +90,12 @@ def health():
 # Helpers
 # --------------------------------------------------
 
+def get_rembg_session():
+    global _rembg_session
+    if _rembg_session is None:
+        _rembg_session = new_session(REMBG_MODEL)
+    return _rembg_session
+
 def remove_background_if_needed(upload: UploadFile, max_dimension: int = MAX_DIMENSION) -> np.ndarray:
     data = upload.file.read()
     if not data:
@@ -106,7 +115,7 @@ def remove_background_if_needed(upload: UploadFile, max_dimension: int = MAX_DIM
             return resize_if_needed_rgba(rgba, max_dimension=max_dimension)
 
     # Ellers: fjern baggrund med rembg
-    output = remove(data, model_name="u2netp")
+    output = remove(data, session=get_rembg_session())
 
     arr_out = np.frombuffer(output, np.uint8)
     img_out = cv2.imdecode(arr_out, cv2.IMREAD_UNCHANGED)
