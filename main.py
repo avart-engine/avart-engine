@@ -96,7 +96,7 @@ def get_rembg_session():
         _rembg_session = new_session(REMBG_MODEL)
     return _rembg_session
 
-def remove_background_if_needed(upload: UploadFile, max_dimension: int = MAX_DIMENSION) -> np.ndarray:
+async def remove_background_if_needed(upload: UploadFile, max_dimension: int = MAX_DIMENSION) -> np.ndarray:
     data = upload.file.read()
     if not data:
         raise ValueError("Empty file")
@@ -164,9 +164,10 @@ def resize_if_needed_rgba(rgba: np.ndarray, max_dimension: int = MAX_DIMENSION) 
 
 
 def read_upload_to_rgba(upload: UploadFile, max_dimension: int = MAX_DIMENSION) -> np.ndarray:
-    data = upload.file.read()
-    if not data:
-        raise ValueError("Empty file")
+    data = await upload.read()
+
+if not data:
+    raise ValueError("Empty file")
 
     arr = np.frombuffer(data, np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
