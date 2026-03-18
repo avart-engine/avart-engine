@@ -115,7 +115,7 @@ def remove_background_if_needed(upload: UploadFile, max_dimension: int = MAX_DIM
             return resize_if_needed_rgba(rgba, max_dimension=max_dimension)
 
     # Resize FØR rembg
-    max_input_size = 1000
+    max_input_size = 1600
 
     h, w = img.shape[:2]
     scale = min(1.0, max_input_size / max(h, w))
@@ -145,6 +145,20 @@ def remove_background_if_needed(upload: UploadFile, max_dimension: int = MAX_DIM
     if len(img_out.shape) != 3 or img_out.shape[2] != 4:
         raise ValueError("Background removal did not return RGBA")
 
+
+    # Tilføj ekstra transparent bund, så contour kan gå helt ned
+bottom_pad = 180
+img_out = cv2.copyMakeBorder(
+    img_out,
+    0,                  # top
+    bottom_pad,         # bottom
+    0,                  # left
+    0,                  # right
+    cv2.BORDER_CONSTANT,
+    value=(0, 0, 0, 0)
+)
+
+   
     rgba = cv2.cvtColor(img_out, cv2.COLOR_BGRA2RGBA)
     return resize_if_needed_rgba(rgba, max_dimension=max_dimension)
 
