@@ -114,6 +114,19 @@ def remove_background_if_needed(upload: UploadFile, max_dimension: int = MAX_DIM
             rgba = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
             return resize_if_needed_rgba(rgba, max_dimension=max_dimension)
 
+# Resize FØR rembg (MEGET vigtigt)
+max_input_size = 1000  # <- justér evt 800-1200
+
+h, w = img.shape[:2]
+scale = min(1.0, max_input_size / max(h, w))
+
+if scale < 1.0:
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    _, buffer = cv2.imencode(".png", img)
+    data = buffer.tobytes()
+    
     # Ellers: fjern baggrund med rembg
     output = remove(data, session=get_rembg_session())
 
