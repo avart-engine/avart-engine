@@ -1,29 +1,61 @@
 from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 import io
+import os
+import tempfile
 
 import numpy as np
 import cv2
 from rembg import remove, new_session
 
-from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 from reportlab.lib import colors
 from reportlab.lib.utils import ImageReader
-
-import cairosvg
+from reportlab.graphics import renderPDF
+from svglib.svglib import svg2rlg
 
 
 app = FastAPI(title="avart-engine")
 
+
+# ---------------------------------
+# DESIGN SETTINGS
+# ---------------------------------
+
 MAX_DIMENSION = 1600
 REMBG_MODEL = "u2net"
+
+BG_COLOR = "#e9e3db"
+
+PAGE_W_MM = 500
+PAGE_H_MM = 700
+
+TOP_BAND_MM = 115
+
+TITLE_FONT = "Helvetica-Bold"
+TITLE_FONT_SIZE = 35
+
+LOGO_WIDTH_MM = 50
+LOGO_BOTTOM_MM = 50
+
+SILHOUETTE_TOP_GAP_MM = 18
+SILHOUETTE_SIDE_MARGIN_MM = 32
+SILHOUETTE_BOTTOM_GAP_MM = 0
+
+DEFAULT_STROKE_WIDTH = 3.5
+
+# Sæt denne hvis du har et rigtigt logo liggende
+LOGO_PATH = None
+# eksempel:
+# LOGO_PATH = "assets/avart-logo.png"
+
+
 _rembg_session = None
 
 
 # ---------------------------------
-# Helpers
+# HELPERS
 # ---------------------------------
 
 def get_rembg_session():
@@ -58,12 +90,25 @@ def remove_background_if_needed(upload: UploadFile, max_dimension: int = MAX_DIM
     if img is None:
         raise ValueError("Could not decode image")
 
-    # Hvis billedet allerede har alpha og faktisk transparency, så brug det direkte
+    # Hvis billedet allerede har alpha og faktisk transparency
     if len(img.shape) == 3 and img.shape[2] == 4:
         alpha = img[:, :, 3]
         if np.any(alpha < 250):
             rgba = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
-            return resize_if_needed_rgba(rgba, max_dimension=max_dimension)
+            rgba = resize_if_needed_rgba(rgba, max_dimension=max_dimension)
+
+            # ekstra transparent bund
+            bottom_pad = 180
+            rgba = cv2.copyMakeBorder(
+                rgba,
+                0,
+                bottom_pad,
+                0,
+                0,
+                cv2.BORDER_CONSTANT,
+                value=(0, 0, 0, 0),
+            )
+            return rgba
 
     # Resize før rembg
     max_input_size = 1600
@@ -97,7 +142,7 @@ def remove_background_if_needed(upload: UploadFile, max_dimension: int = MAX_DIM
     if len(img_out.shape) != 3 or img_out.shape[2] != 4:
         raise ValueError("Background removal did not return RGBA")
 
-    # Ekstra transparent bund
+    # ekstra transparent bund
     bottom_pad = 180
     img_out = cv2.copyMakeBorder(
         img_out,
@@ -131,7 +176,7 @@ def smooth_contour(contour: np.ndarray, epsilon_ratio: float = 0.002):
     return cv2.approxPolyDP(contour, epsilon, True)
 
 
-def contour_to_svg(contour: np.ndarray, width: int, height: int, stroke_width: float = 3.5) -> str:
+def contour_to_svg(contour: np.ndarray, width: int, height: int, stroke_width: float = DEFAULT_STROKE_WIDTH) -> str:
     pts = contour[:, 0, :]
     path = "M " + " L ".join([f"{x},{y}" for x, y in pts])
 
@@ -141,64 +186,119 @@ def contour_to_svg(contour: np.ndarray, width: int, height: int, stroke_width: f
     return svg
 
 
-def generate_poster(
+def draw_svg_on_pdf(
+    pdf_canvas,
+    svg_string: str,
+    x: float,
+    y: float,
+    max_width: float,
+    max_height: float,
+):
+    tmp_svg = tempfile.NamedTemporaryFile(delete=False, suffix=".svg")
+    try:
+        tmp_svg.write(svg_string.encode("utf-8"))
+        tmp_svg.close()
+
+        drawing = svg2rlg(tmp_svg.name)
+        if drawing is None:
+            raise ValueError("Could not load SVG drawing")
+
+        raw_w = drawing.width
+        raw_h = drawing.height
+
+        if raw_w <= 0 or raw_h <= 0:
+            raise ValueError("Invalid SVG size")
+
+        scale = min(max_width / raw_w, max_height / raw_h)
+
+        drawing.width *= scale
+        drawing.height *= scale
+        drawing.scale(scale, scale)
+
+        pdf_canvas.saveState()
+        pdf_canvas.translate(x, y)
+        renderPDF.draw(drawing, pdf_canvas, 0, 0)
+        pdf_canvas.restoreState()
+
+    finally:
+        try:
+            os.unlink(tmp_svg.name)
+        except Exception:
+            pass
+
+
+def generate_poster_pdf(
     svg_string: str,
     name: str,
-    bg_color: str = "#e9e3db",
-    margin_mm: int = 20,
-    logo_path: str | None = None,
+    bg_color: str = BG_COLOR,
+    logo_path: str | None = LOGO_PATH,
 ) -> bytes:
-    # SVG -> PNG bytes
-    png_bytes = cairosvg.svg2png(bytestring=svg_string.encode("utf-8"))
-
-    # PNG -> PDF
     buffer = io.BytesIO()
-    page_w, page_h = A4
-    c = canvas.Canvas(buffer, pagesize=A4)
 
-    # Baggrund
+    width = PAGE_W_MM * mm
+    height = PAGE_H_MM * mm
+
+    top_band_h = TOP_BAND_MM * mm
+    logo_width = LOGO_WIDTH_MM * mm
+    logo_bottom = LOGO_BOTTOM_MM * mm
+
+    side_margin = SILHOUETTE_SIDE_MARGIN_MM * mm
+    top_gap = SILHOUETTE_TOP_GAP_MM * mm
+    bottom_gap = SILHOUETTE_BOTTOM_GAP_MM * mm
+
+    c = canvas.Canvas(buffer, pagesize=(width, height))
+
+    # background
     c.setFillColor(colors.HexColor(bg_color))
-    c.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+    c.rect(0, 0, width, height, fill=1, stroke=0)
 
-    margin = margin_mm * mm
-
-    # Titel
+    # title
     c.setFillColor(colors.black)
-    c.setFont("Helvetica-Bold", 20)
-    c.drawCentredString(page_w / 2, page_h - margin - 8, name)
+    c.setFont(TITLE_FONT, TITLE_FONT_SIZE)
+    title_y = height - (top_band_h / 2) - (TITLE_FONT_SIZE * 0.35)
+    c.drawCentredString(width / 2, title_y, name)
 
-    # Motiv
-    image = ImageReader(io.BytesIO(png_bytes))
-    img_w, img_h = image.getSize()
+    # silhouette area
+    silhouette_top_y = height - top_band_h - top_gap
+    silhouette_bottom_y = logo_bottom + (18 * mm) + bottom_gap
+    silhouette_height = silhouette_top_y - silhouette_bottom_y
+    silhouette_width = width - (2 * side_margin)
 
-    max_draw_w = page_w - (2 * margin)
-    max_draw_h = page_h - (2 * margin) - 90
+    draw_svg_on_pdf(
+        c,
+        svg_string=svg_string,
+        x=side_margin,
+        y=silhouette_bottom_y,
+        max_width=silhouette_width,
+        max_height=silhouette_height,
+    )
 
-    scale = min(max_draw_w / img_w, max_draw_h / img_h)
-    draw_w = img_w * scale
-    draw_h = img_h * scale
-
-    x = (page_w - draw_w) / 2
-    y = margin + 25
-
-    c.drawImage(image, x, y, width=draw_w, height=draw_h, mask="auto")
-
-    # Logo / fallback tekst
-    if logo_path:
+    # logo
+    if logo_path and os.path.exists(logo_path):
         try:
             logo = ImageReader(logo_path)
-            logo_w, logo_h = logo.getSize()
-            target_w = 40 * mm
-            target_h = target_w * (logo_h / logo_w)
-            logo_x = (page_w - target_w) / 2
-            logo_y = margin - 2
-            c.drawImage(logo, logo_x, logo_y, width=target_w, height=target_h, mask="auto")
+            lw, lh = logo.getSize()
+            logo_h = logo_width * (lh / lw)
+
+            logo_x = (width - logo_width) / 2
+            logo_y = logo_bottom
+
+            c.drawImage(
+                logo,
+                logo_x,
+                logo_y,
+                width=logo_width,
+                height=logo_h,
+                mask="auto",
+            )
         except Exception:
+            c.setFillColor(colors.black)
             c.setFont("Helvetica-Bold", 16)
-            c.drawCentredString(page_w / 2, margin - 2 + 8, "avart")
+            c.drawCentredString(width / 2, logo_bottom + 6, "avart")
     else:
+        c.setFillColor(colors.black)
         c.setFont("Helvetica-Bold", 16)
-        c.drawCentredString(page_w / 2, margin - 2 + 8, "avart")
+        c.drawCentredString(width / 2, logo_bottom + 6, "avart")
 
     c.showPage()
     c.save()
@@ -234,9 +334,7 @@ def health():
 async def poster_pdf(
     file: UploadFile = File(...),
     name: str = Query("Test"),
-    stroke_width: float = Query(3.5),
-    bg_color: str = Query("#e9e3db"),
-    margin_mm: int = Query(20, ge=0, le=60),
+    stroke_width: float = Query(DEFAULT_STROKE_WIDTH),
 ):
     try:
         rgba = remove_background_if_needed(file, max_dimension=MAX_DIMENSION)
@@ -248,12 +346,11 @@ async def poster_pdf(
         h, w = rgba.shape[:2]
         svg = contour_to_svg(contour, w, h, stroke_width)
 
-        pdf_bytes = generate_poster(
+        pdf_bytes = generate_poster_pdf(
             svg,
             name=name,
-            bg_color=bg_color,
-            margin_mm=margin_mm,
-            logo_path=None,
+            bg_color=BG_COLOR,
+            logo_path=LOGO_PATH,
         )
 
         return StreamingResponse(
