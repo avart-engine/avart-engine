@@ -8,3 +8,4 @@ reportlab
 svglib
 rembg[cpu]
 onnxruntime
+cairosvg
