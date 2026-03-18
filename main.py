@@ -223,8 +223,13 @@ async def poster_pdf(
         svg = contour_to_svg(contour, w, h, stroke_width)
 
         # 🔥 generate PDF (skal returnere bytes!)
-        pdf_bytes = generate_poster(svg, name)
-
+        pdf_bytes = generate_poster(
+    svg,
+    name=name,
+    bg_color="#e9e3db",
+    margin_mm=20,
+    logo_path=None
+)
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
