@@ -130,16 +130,42 @@ def contour_to_svg(contour, width, height, stroke_width=3):
     return svg
 
 
-def generate_poster(svg: str, name: str):
-    return f"""<html>
-<body style="background:#e9e3db; display:flex; justify-content:center;">
-<div style="width:600px; text-align:center; font-family:sans-serif;">
-<h2>{name}</h2>
-{svg}
-<p style="margin-top:40px;">avart</p>
-</div>
-</body>
-</html>""".encode("utf-8")
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Spacer
+from reportlab.platypus import Image as RLImage
+from reportlab.lib.units import mm
+import io
+import cairosvg
+
+
+def generate_poster(svg_string: str, name: str) -> bytes:
+    png_bytes = cairosvg.svg2png(bytestring=svg_string.encode("utf-8"))
+
+    buffer = io.BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=20,
+        rightMargin=20,
+        topMargin=40,
+        bottomMargin=40,
+    )
+
+    elements = []
+
+    img_buffer = io.BytesIO(png_bytes)
+    img = RLImage(img_buffer, width=150*mm, height=150*mm)
+    elements.append(img)
+
+    elements.append(Spacer(1, 20))
+
+    doc.build(elements)
+
+    pdf = buffer.getvalue()
+    buffer.close()
+
+    return pdf
 
 
 # ------------------------
