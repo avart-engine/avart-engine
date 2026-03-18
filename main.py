@@ -161,33 +161,6 @@ def resize_if_needed_rgba(rgba: np.ndarray, max_dimension: int = MAX_DIMENSION) 
 
     return cv2.resize(rgba, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-
-def remove_background_if_needed(upload: UploadFile, max_dimension: int = MAX_DIMENSION) -> np.ndarray:
-
-    data = upload.file.read()
-    if not data:
-        raise ValueError("Empty file")
-
-    arr = np.frombuffer(data, np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
-
-    if img is None:
-        raise ValueError("Could not decode image")
-
-    if len(img.shape) != 3:
-        raise ValueError("Image must have color channels")
-
-    if img.shape[2] == 3:
-        alpha = np.full((img.shape[0], img.shape[1], 1), 255, dtype=np.uint8)
-        img = np.concatenate([img, alpha], axis=2)
-
-    if img.shape[2] != 4:
-        raise ValueError("Image must have 4 channels")
-
-    rgba = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
-    return resize_if_needed_rgba(rgba, max_dimension=max_dimension)
-
-
 def alpha_to_mask(
     rgba: np.ndarray,
     alpha_threshold: int = 1,
