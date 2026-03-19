@@ -221,22 +221,34 @@ def smooth_contour_points(points: np.ndarray, smooth_window: int = 9) -> np.ndar
 
 def get_smoothed_outer_contour(
     mask: np.ndarray,
-    epsilon_ratio: float = 0.00045,
-    smooth_window: int = 9,
+    epsilon_ratio: float = 0.00035,
+    smooth_window: int = 11,
 ) -> np.ndarray:
+
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
     if not contours:
         raise ValueError("No contour found")
 
     largest = max(contours, key=cv2.contourArea)
+
+    # 🔹 STEP 1: stærkere blur af mask (glatter kant før contour)
+    mask_blur = cv2.GaussianBlur(mask, (9, 9), 0)
+
+    contours, _ = cv2.findContours(mask_blur, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    largest = max(contours, key=cv2.contourArea)
+
     points = largest[:, 0, :].astype(np.float32)
 
+    # 🔹 STEP 2: smoothing
     smoothed = smooth_contour_points(points, smooth_window=smooth_window)
+
     smoothed_contour = np.round(smoothed).astype(np.int32).reshape(-1, 1, 2)
 
+    # 🔹 STEP 3: simplificering (færre punkter)
     peri = cv2.arcLength(smoothed_contour, True)
     eps = max(0.5, peri * epsilon_ratio)
+
     simplified = cv2.approxPolyDP(smoothed_contour, eps, True)
 
     return simplified
