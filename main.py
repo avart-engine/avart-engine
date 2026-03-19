@@ -412,25 +412,19 @@ def contour_to_svg(
     contour: np.ndarray,
     width: int,
     height: int,
-    stroke-width="{stroke_width}"
+    stroke_width: float = 3.5,
     crop_to_subject: bool = False,
     pad: int = 30,
 ) -> str:
-
     if crop_to_subject:
         contour, width, height = crop_contour_to_subject(contour, width, height, pad=pad)
 
     contour = anchor_contour_to_bottom(contour, height)
     contour = open_contour_at_bottom(contour, height=height, bleed=0)
-
     pts = contour[:, 0, :]
 
     if len(pts) < 2:
         raise ValueError("Contour too small")
-
-    # 🔥 NORMALISER STROKE (så den ser ens ud på alle billeder)
-    norm = max(width, height) / 1000.0
-    effective_stroke = stroke_width / max(norm, 0.001)
 
     d = [f"M {pts[0][0]:.2f} {pts[0][1]:.2f}"]
     for p in pts[1:]:
@@ -447,7 +441,7 @@ viewBox="0 0 {width} {height}">
     d="{path}"
     fill="none"
     stroke="black"
-    stroke-width="{effective_stroke}"
+    stroke-width="{stroke_width}"
     stroke-linecap="round"
     stroke-linejoin="round"/>
 </svg>
