@@ -511,7 +511,7 @@ def generate_poster_pdf(
     raw_w = max_x - min_x
     raw_h = max_y - min_y
 
-    TARGET_HEAD_RATIO = 0.42
+    TARGET_HEAD_RATIO = 0.60
     MAX_HEIGHT_RATIO = 1.50
 
     if head_width is None or head_width <= 0:
