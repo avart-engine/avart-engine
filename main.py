@@ -486,10 +486,13 @@ def generate_poster_pdf(svg_string: str, name: str, stroke_width: float = DEFAUL
     raw_w = max_x - min_x
     raw_h = max_y - min_y
 
+    MAX_WIDTH_RATIO = 0.72   # 👈 vigtig!
+    MAX_HEIGHT_RATIO = 0.95
+
     silhouette_scale = min(
-        (width * 0.82) / raw_w,
-        (silhouette_height * 0.98) / raw_h,
-    )
+    (width * MAX_WIDTH_RATIO) / raw_w,
+    (silhouette_height * MAX_HEIGHT_RATIO) / raw_h,
+)
 
     drawing.scale(silhouette_scale, silhouette_scale)
 
