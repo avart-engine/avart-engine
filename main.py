@@ -102,6 +102,7 @@ def health():
 # Helpers
 # --------------------------------------------------
 
+
 def resize_if_needed_rgba(rgba: np.ndarray, max_dimension: int = MAX_DIMENSION) -> np.ndarray:
     h, w = rgba.shape[:2]
     longest = max(h, w)
@@ -449,7 +450,30 @@ viewBox="0 0 {width} {height}">
     return svg
 
 
-def generate_poster_pdf(svg_string: str, name: str, stroke_width: float = DEFAULT_STROKE_WIDTH) -> bytes:
+def estimate_head_width(contour: np.ndarray) -> float:
+    pts = contour[:, 0, :].astype(np.float32)
+
+    min_y = pts[:, 1].min()
+    max_y = pts[:, 1].max()
+    total_h = max_y - min_y
+
+    # brug øverste del af silhouetten som "hoved"
+    cutoff_y = min_y + total_h * 0.55
+    head_pts = pts[pts[:, 1] <= cutoff_y]
+
+    if len(head_pts) < 2:
+        return float(pts[:, 0].max() - pts[:, 0].min())
+
+    head_w = head_pts[:, 0].max() - head_pts[:, 0].min()
+    return float(head_w)
+
+
+def generate_poster_pdf(
+    svg_string: str,
+    name: str,
+    stroke_width: float = DEFAULT_STROKE_WIDTH,
+    head_width: float | None = None,
+) -> bytes:
     width = PAGE_W_MM * mm
     height = PAGE_H_MM * mm
 
@@ -487,12 +511,15 @@ def generate_poster_pdf(svg_string: str, name: str, stroke_width: float = DEFAUL
     raw_w = max_x - min_x
     raw_h = max_y - min_y
 
-    # head-based / width-limited scaling
-    MAX_WIDTH_RATIO = 0.72
+    # HEAD-based scaling
+    TARGET_HEAD_RATIO = 0.50
     MAX_HEIGHT_RATIO = 0.95
 
+    if head_width is None or head_width <= 0:
+        head_width = raw_w * 0.7
+
     silhouette_scale = min(
-        (width * MAX_WIDTH_RATIO) / raw_w,
+        (width * TARGET_HEAD_RATIO) / head_width,
         (silhouette_height * MAX_HEIGHT_RATIO) / raw_h,
     )
 
@@ -701,6 +728,8 @@ async def poster_pdf(
             smooth_window=smooth_window,
         )
 
+head_width = estimate_head_width(contour)
+
         svg = contour_to_svg(
             contour=contour,
             width=w,
@@ -710,7 +739,12 @@ async def poster_pdf(
             pad=pad,
         )
 
-        pdf_bytes = generate_poster_pdf(svg, name, stroke_width=stroke_width)
+        pdf_bytes = generate_poster_pdf(
+    svg,
+    name,
+    stroke_width=stroke_width,
+    head_width=head_width,
+)
 
         return StreamingResponse(
             io.BytesIO(pdf_bytes),
