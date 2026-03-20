@@ -700,6 +700,8 @@ async def alpha_svg(
         }
     },
 )
+
+@app.post("/poster/pdf")
 async def poster_pdf(
     file: UploadFile = File(...),
     name: str = Query("Clara & Ellinor"),
@@ -712,43 +714,41 @@ async def poster_pdf(
     crop_to_subject: bool = Query(True),
     pad: int = Query(30, ge=0, le=300),
 ):
+    try:
+        rgba = remove_background_if_needed(file, max_dimension=max_dimension)
+        h, w = rgba.shape[:2]
 
+        mask = alpha_to_mask(rgba, alpha_threshold=alpha_threshold, smooth=smooth)
 
-try:
-    rgba = remove_background_if_needed(file, max_dimension=max_dimension)
-    h, w = rgba.shape[:2]
+        contour = get_smoothed_outer_contour(
+            mask,
+            epsilon_ratio=epsilon_ratio,
+            smooth_window=smooth_window,
+        )
 
-    mask = alpha_to_mask(rgba, alpha_threshold=alpha_threshold, smooth=smooth)
+        head_width = estimate_head_width(contour)
 
-    contour = get_smoothed_outer_contour(
-        mask,
-        epsilon_ratio=epsilon_ratio,
-        smooth_window=smooth_window,
-    )
+        svg = contour_to_svg(
+            contour=contour,
+            width=w,
+            height=h,
+            stroke_width=stroke_width,
+            crop_to_subject=crop_to_subject,
+            pad=pad,
+        )
 
-    head_width = estimate_head_width(contour)
+        pdf_bytes = generate_poster_pdf(
+            svg,
+            name,
+            stroke_width=stroke_width,
+            head_width=head_width,
+        )
 
-    svg = contour_to_svg(
-        contour=contour,
-        width=w,
-        height=h,
-        stroke_width=stroke_width,
-        crop_to_subject=crop_to_subject,
-        pad=pad,
-    )
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'},
+        )
 
-    pdf_bytes = generate_poster_pdf(
-        svg,
-        name,
-        stroke_width=stroke_width,
-        head_width=head_width,
-    )
-
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'},
-    )
-
-except Exception as e:
-    return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
