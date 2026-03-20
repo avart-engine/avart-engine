@@ -473,6 +473,7 @@ def generate_poster_pdf(
     name: str,
     stroke_width: float = DEFAULT_STROKE_WIDTH,
     head_width: float | None = None,
+    scale_adjust: float = 0.0,  # 👈 TILFØJ HER
 ) -> bytes:
     width = PAGE_W_MM * mm
     height = PAGE_H_MM * mm
@@ -518,7 +519,7 @@ def generate_poster_pdf(
         head_width = raw_w * 0.7
 
     silhouette_scale = (width * TARGET_HEAD_RATIO) / head_width
-
+    silhouette_scale *= (1 + scale_adjust)
     drawing.scale(silhouette_scale, silhouette_scale)
     set_stroke_width_recursive(drawing, stroke_width / silhouette_scale)
 
@@ -742,6 +743,7 @@ async def poster_pdf(
             name,
             stroke_width=stroke_width,
             head_width=head_width,
+            scale_adjust=scale_adjust,
         )
 
         return StreamingResponse(
