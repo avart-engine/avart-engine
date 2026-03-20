@@ -482,57 +482,30 @@ def generate_poster_pdf(svg_string: str, name: str, stroke_width: float = DEFAUL
     silhouette_bottom_y = 0
     silhouette_height = silhouette_top_y - silhouette_bottom_y
 
+    # original bounds
     min_x, min_y, max_x, max_y = drawing.getBounds()
     raw_w = max_x - min_x
     raw_h = max_y - min_y
 
-    MAX_WIDTH_RATIO = 0.72   # 👈 vigtig!
+    # head-based / width-limited scaling
+    MAX_WIDTH_RATIO = 0.72
     MAX_HEIGHT_RATIO = 0.95
 
+    silhouette_scale = min(
+        (width * MAX_WIDTH_RATIO) / raw_w,
+        (silhouette_height * MAX_HEIGHT_RATIO) / raw_h,
+    )
 
+    drawing.scale(silhouette_scale, silhouette_scale)
+    set_stroke_width_recursive(drawing, stroke_width / silhouette_scale)
 
-    # original bounds
-min_x, min_y, max_x, max_y = drawing.getBounds()
-raw_w = max_x - min_x
-raw_h = max_y - min_y
+    # recalc bounds after scaling
+    min_x, min_y, max_x, max_y = drawing.getBounds()
+    draw_w = max_x - min_x
 
-# brug øverste del som "head area"
-head_cutoff_y = min_y + raw_h * 0.55
-
-head_points = []
-for obj in getattr(drawing, "contents", []):
-    if hasattr(obj, "getBounds"):
-        try:
-            ox1, oy1, ox2, oy2 = obj.getBounds()
-            if oy2 >= head_cutoff_y:
-                head_points.append((ox1, oy1, ox2, oy2))
-        except Exception:
-            pass
-
-if head_points:
-    head_min_x = min(p[0] for p in head_points)
-    head_max_x = max(p[2] for p in head_points)
-    head_w = head_max_x - head_min_x
-else:
-    head_w = raw_w * 0.7  # fallback
-
-TARGET_HEAD_RATIO = 0.50
-MAX_HEIGHT_RATIO = 0.95
-
-silhouette_scale = min(
-    (width * TARGET_HEAD_RATIO) / head_w,
-    (silhouette_height * MAX_HEIGHT_RATIO) / raw_h,
-)
-
-drawing.scale(silhouette_scale, silhouette_scale)
-
-set_stroke_width_recursive(drawing, stroke_width / silhouette_scale)
-
-min_x, min_y, max_x, max_y = drawing.getBounds()
-draw_w = max_x - min_x
-
-x = (width - draw_w) / 2 - min_x
-y = -min_y
+    # center horizontally, anchor to bottom
+    x = (width - draw_w) / 2 - min_x
+    y = -min_y
 
     c.saveState()
     c.translate(x, y)
@@ -565,7 +538,6 @@ y = -min_y
         pass
 
     return pdf_bytes
-
 
 # --------------------------------------------------
 # API
