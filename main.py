@@ -713,40 +713,40 @@ async def poster_pdf(
     pad: int = Query(30, ge=0, le=300),
 ):
     try:
-        rgba = remove_background_if_needed(file, max_dimension=max_dimension)
-        h, w = rgba.shape[:2]
+    rgba = remove_background_if_needed(file, max_dimension=max_dimension)
+    h, w = rgba.shape[:2]
 
-        mask = alpha_to_mask(rgba, alpha_threshold=alpha_threshold, smooth=smooth)
+    mask = alpha_to_mask(rgba, alpha_threshold=alpha_threshold, smooth=smooth)
 
-        contour = get_smoothed_outer_contour(
-            mask,
-            epsilon_ratio=epsilon_ratio,
-            smooth_window=smooth_window,
-        )
+    contour = get_smoothed_outer_contour(
+        mask,
+        epsilon_ratio=epsilon_ratio,
+        smooth_window=smooth_window,
+    )
 
-head_width = estimate_head_width(contour)
+    head_width = estimate_head_width(contour)
 
-        svg = contour_to_svg(
-            contour=contour,
-            width=w,
-            height=h,
-            stroke_width=stroke_width,
-            crop_to_subject=crop_to_subject,
-            pad=pad,
-        )
+    svg = contour_to_svg(
+        contour=contour,
+        width=w,
+        height=h,
+        stroke_width=stroke_width,
+        crop_to_subject=crop_to_subject,
+        pad=pad,
+    )
 
-        pdf_bytes = generate_poster_pdf(
-    svg,
-    name,
-    stroke_width=stroke_width,
-    head_width=head_width,
-)
+    pdf_bytes = generate_poster_pdf(
+        svg,
+        name,
+        stroke_width=stroke_width,
+        head_width=head_width,
+    )
 
-        return StreamingResponse(
-            io.BytesIO(pdf_bytes),
-            media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'},
-        )
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'},
+    )
 
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+except Exception as e:
+    return JSONResponse({"error": str(e)}, status_code=400)
