@@ -473,7 +473,7 @@ def generate_poster_pdf(
     name: str,
     stroke_width: float = DEFAULT_STROKE_WIDTH,
     head_width: float | None = None,
-    scale_adjust: float = 0.0,  # 👈 TILFØJ HER
+    scale_adjust: float = 0.0,  #
 ) -> bytes:
     width = PAGE_W_MM * mm
     height = PAGE_H_MM * mm
@@ -744,7 +744,7 @@ async def poster_pdf(
             name,
             stroke_width=stroke_width,
             head_width=head_width,
-            scale_adjust=0.0,
+            scale_adjust=scale_adjust,
         )
         
         return StreamingResponse(
