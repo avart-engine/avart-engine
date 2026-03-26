@@ -714,6 +714,7 @@ async def poster_pdf(
     stroke_width: float = Query(3.5, ge=0.5, le=12.0),
     crop_to_subject: bool = Query(True),
     pad: int = Query(30, ge=0, le=300),
+    scale_adjust: float = Query(0.0, ge=-0.2, le=0.2),
 ):
     try:
         rgba = remove_background_if_needed(file, max_dimension=max_dimension)
@@ -743,9 +744,9 @@ async def poster_pdf(
             name,
             stroke_width=stroke_width,
             head_width=head_width,
-            scale_adjust=scale_adjust,
+            scale_adjust=0.0,
         )
-
+        
         return StreamingResponse(
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",
