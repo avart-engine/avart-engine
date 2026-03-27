@@ -272,10 +272,11 @@ def contour_to_svg(
     svg_epsilon_ratio: float = 0.0025,
 ) -> str:
     """
-    Convert contour to a cleaner SVG path.
-    SVG version is intentionally a little more poster-style than preview.
+    Convert contour directly to SVG path.
+    No extra SVG simplification for now.
     """
-    contour_svg = simplify_for_svg(contour, svg_epsilon_ratio=svg_epsilon_ratio)
+
+    contour_svg = contour.copy()
 
     if crop_to_subject:
         contour_svg, width, height = crop_contour_to_subject(contour_svg, width, height, pad=pad)
