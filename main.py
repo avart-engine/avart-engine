@@ -225,7 +225,7 @@ def get_smoothed_outer_contour(
     epsilon_ratio: float = 0.00025,
     smooth_window: int = 17,
 ) -> np.ndarray:
-    mask_blur = cv2.GaussianBlur(mask, (9, 9), 0)
+    mask_blur = cv2.GaussianBlur(mask, (15, 15), 0)
 
     contours, _ = cv2.findContours(mask_blur, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     if not contours:
