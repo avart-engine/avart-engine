@@ -85,23 +85,32 @@ def alpha_to_mask(
 
 def get_smoothed_outer_contour(
     mask: np.ndarray,
-    epsilon_ratio: float = 0.001,
     smooth_window: int = 15,
 ) -> np.ndarray:
-    """
-    Find outer contour and smooth it using a simple moving average.
-    """
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
     if not contours:
         raise ValueError("No contour found")
 
-    largest = max(contours, key=cv2.contourArea)
+    h, w = mask.shape[:2]
+    img_area = h * w
 
-    contour = largest
+    valid = []
+    for c in contours:
+        area = cv2.contourArea(c)
+
+        # behold kun contours der ligner et motiv
+        if area > img_area * 0.01 and area < img_area * 0.9:
+            valid.append(c)
+
+    if valid:
+        contour = max(valid, key=cv2.contourArea)
+    else:
+        contour = max(contours, key=cv2.contourArea)
+
     pts = contour[:, 0, :].astype(np.float32)
-
     n = len(pts)
+
     if n < smooth_window:
         return contour
 
@@ -117,7 +126,6 @@ def get_smoothed_outer_contour(
         smoothed.append(segment.mean(axis=0))
 
     smoothed = np.array(smoothed, dtype=np.int32).reshape(-1, 1, 2)
-
     return smoothed
 
 
