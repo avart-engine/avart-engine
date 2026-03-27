@@ -423,7 +423,13 @@ async def alpha_svg(
             svg_epsilon_ratio=svg_epsilon_ratio,
         )
 
-        return Response(content=svg, media_type="image/svg+xml")
+    return Response(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={
+            "Content-Disposition": "attachment; filename=avart.svg"
+        },
+    )
 
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
