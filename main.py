@@ -336,7 +336,6 @@ async def alpha_preview(
             mask,
             smooth_window=smooth_window,
         )
-        )
 
         png = render_preview_png(
             contour=contour,
